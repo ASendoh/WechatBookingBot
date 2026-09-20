@@ -1,8 +1,10 @@
 import pyautogui
+import time
 
 
 def check_selected(x, y):
 
+    time.sleep(0.1)
     # 获取像素颜色
     r, g, b = pyautogui.pixel(x, y)
 
