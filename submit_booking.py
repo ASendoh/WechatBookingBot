@@ -1,6 +1,7 @@
 import pyautogui
 
 
+
 def submit_booking() -> None:
     print("点击提交预约")
 
