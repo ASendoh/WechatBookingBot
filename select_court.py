@@ -52,7 +52,7 @@ def select_court() -> bool:
                 pyautogui.click(x, y)
 
                 # 点击后等待 0.1 秒，再检查颜色。
-                time.sleep(0.1)
+                time.sleep(0.2)
 
                 if check_selected(x, y):
                     print(f"{court}号场 {t} 选择成功")

@@ -12,3 +12,4 @@ def submit_booking() -> None:
     pyautogui.click(x, y)
 
     print("提交预约点击完成")
+    pyautogui.moveTo(762, 678)

@@ -8,7 +8,7 @@ def select_tomorrow() -> None:
     x = 438
     y = 187
 
-    time.sleep(0.1)
+    time.sleep(0.15)
     pyautogui.click(x, y)
     time.sleep(0.1)
     pyautogui.click(x, y)
