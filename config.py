@@ -144,8 +144,8 @@ TOMORROW_RETRIES = 5
 # 等待结束后由下一步“选择第二天”的紫色横线和场地检测负责确认页面状态。
 REFRESH_WAIT_SECONDS = 0.1
 
-# 每次点击羽毛球入口或刷新按钮后，最多等待预约页面模板出现的时间。
-PAGE_LOAD_SECONDS = 3.0
+# 每次点击羽毛球入口后，最多等待预约页面模板出现的时间；不影响顶部刷新等待。
+PAGE_LOAD_SECONDS = 0.1
 
 # 调整微信窗口位置和尺寸后，等待页面完成重新排版的时间。
 RESIZE_LAYOUT_WAIT = 0.1
