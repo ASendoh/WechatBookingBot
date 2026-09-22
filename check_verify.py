@@ -1,57 +1,51 @@
 import pyautogui
 import time
-from random_drag import random_drag
+import keyboard
 
-
-# 验证弹窗附近检测点坐标
-# 你需要自己修改为稳定的位置
-VERIFY_PIXEL_X = 1949
-VERIFY_PIXEL_Y = 907
-
+from config import (
+    POLL_INTERVAL,
+    VERIFY_GREY,
+    VERIFY_PIXEL_POS,
+    VERIFY_STABLE_SECONDS,
+    VERIFY_TOLERANCE,
+)
+from mouse_recorder import play
 
 def check_verify():
-
-    r, g, b = pyautogui.pixel(
-        VERIFY_PIXEL_X,
-        VERIFY_PIXEL_Y
-    )
-
-    print("验证检测点颜色:", r, g, b)
-
-    # 弹窗出现后的灰色
-    if (
-        abs(r - 127) < 5 and
-        abs(g - 127) < 5 and
-        abs(b - 127) < 5
-    ):
-        return True
-
-    return False
+    rgb = pyautogui.pixel(*VERIFY_PIXEL_POS)
+    return all(abs(channel - VERIFY_GREY) < VERIFY_TOLERANCE for channel in rgb)
 
 
 
 def wait_verify():
-
     print("等待验证窗口出现...")
-
-    while True:
-
+    while not keyboard.is_pressed("esc"):
         if check_verify():
+            print("检测到验证窗口，请用户手动完成滑块验证")
+            time.sleep(0.5) 
+            play()
+            break
+        time.sleep(POLL_INTERVAL)
+    else:
+        print("检测到 Esc，停止等待验证")
+        return False
 
-            print("检测到验证窗口，正在验证")
-            random_drag(
-                762, 678,   # 起点
-                1223, 677    # 终点
-            )
+    stable_since = None
+    while not keyboard.is_pressed("esc"):
+        if check_verify():
+            stable_since = None
+        else:
+            stable_since = stable_since or time.monotonic()
+            if time.monotonic() - stable_since >= VERIFY_STABLE_SECONDS:
+                print("验证遮罩已稳定消失")
+                return True
+        time.sleep(POLL_INTERVAL)
 
-            return True
-
-
-        time.sleep(0.05)
+    print("检测到 Esc，停止等待验证")
+    return False
 
 
 if __name__ == "__main__":
-    print("1秒后进行验证")
+    print("1秒后开始等待人工验证")
     time.sleep(1)
-
     wait_verify()

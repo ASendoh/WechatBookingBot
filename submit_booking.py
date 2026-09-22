@@ -1,15 +1,19 @@
 import pyautogui
+import keyboard
+import time
+
+from config import SLIDER_START_POS, SUBMIT_POS
+from mouse_recorder import play
 
 
+def submit_booking() -> bool:
+    if keyboard.is_pressed("esc"):
+        print("检测到 Esc，不提交预约")
+        return False
 
-def submit_booking() -> None:
     print("点击提交预约")
-
-    # 提交预约按钮坐标
-    x = 1911
-    y = 1357
-
-    pyautogui.click(x, y)
-
+    pyautogui.click(*SUBMIT_POS)
     print("提交预约点击完成")
-    pyautogui.moveTo(762, 678)
+    #pyautogui.moveTo(*SLIDER_START_POS)
+
+    return True

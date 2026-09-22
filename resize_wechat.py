@@ -2,6 +2,8 @@ import win32gui
 import win32con
 import time
 
+from config import RESIZE_LAYOUT_WAIT, WINDOW_POS, WINDOW_SIZE
+
 
 def resize_wechat():
 
@@ -13,7 +15,7 @@ def resize_wechat():
 
     if hwnd == 0:
         print("没有找到微信窗口")
-        return
+        return False
 
     print("找到微信窗口")
 
@@ -24,20 +26,23 @@ def resize_wechat():
     print(left, top, right, bottom)
 
     # 设置目标尺寸
-    width = 2000
-    height = 1400
+    x, y = WINDOW_POS
+    width, height = WINDOW_SIZE
 
     win32gui.SetWindowPos(
         hwnd,
         None,
-        left,
-        top,
+        x,
+        y,
         width,
         height,
         win32con.SWP_NOZORDER
     )
 
-    print("调整完成")
+    # 等待页面按新尺寸完成重新布局，再使用调整后的固定坐标。
+    time.sleep(RESIZE_LAYOUT_WAIT)
+    print(f"调整完成：位置 {WINDOW_POS}，尺寸 {WINDOW_SIZE}")
+    return True
 
 
 if __name__ == "__main__":

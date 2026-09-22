@@ -2,66 +2,116 @@ import time
 import keyboard
 import pyautogui
 
-from config import courts, times
-from check_selected import check_selected
+from check_selected import AVAILABLE, SELECTED, get_state
+from config import (
+    CLICK_WAIT,
+    COURT_CLICK_OFFSET,
+    COURT_X,
+    ENABLE_MORNING_TEST_FALLBACK,
+    MORNING_TEST_TIME,
+    SUBMIT_STATE_POS,
+    TIME_Y,
+    courts,
+    times,
+)
 
 
-# 场地横坐标
-court_x = {
-    1: 112,
-    2: 222,
-    3: 332,
-    4: 432,
-    5: 552,
-    6: 672,
-    7: 792,
-    8: 902,
-    9: 995,
-    10: 1109,
-    11: 1212,
-    12: 1332,
-    13: 1452,
-    14: 1572,
-    15: 1652,
-    16: 1727,
-    17: 1837,
-}
-
-# 时间纵坐标
-time_y = {
-    "19:00-20:00": 1189,
-    "20:00-21:00": 1250,
-}
+def candidate_courts(target):
+    result = [target]
+    for distance in range(1, len(COURT_X)):
+        for court in (target + distance, target - distance):
+            if court in COURT_X:
+                result.append(court)
+    return result
 
 
-def select_court() -> bool:
-    print("选择场地")
+def submit_is_enabled():
+    state, rgb = get_state(
+        *SUBMIT_STATE_POS,
+        offsets=((0, 0),),
+        require_cell_border=False,
+    )
+    print(f"提交按钮检测颜色: {rgb}，状态: {state}")
+    return state == SELECTED
 
-    for court in courts:
-        x = court_x[court]
 
-        for t in times:
-            y = time_y[t]
+def click_succeeded(court, time_name):
+    x, y = COURT_X[court], TIME_Y[time_name]
+    if time_name == "20:00-21:00" and submit_is_enabled():
+        return True
+    state, rgb = get_state(x, y)
+    print(f"点击后检测 {court}号场 {time_name}: {state} {rgb}")
+    return state == SELECTED
 
-            while True:
-                if keyboard.is_pressed("esc"):
-                    print("检测到按下 Esc，结束选场")
-                    return False
 
-                print(f"点击 {court}号场 {t}: ({x},{y})")
-                pyautogui.click(x, y)
+def select_court():
+    if not courts:
+        print("config.py 未配置目标场地")
+        return []
 
-                # 点击后等待 0.1 秒，再检查颜色。
-                time.sleep(0.2)
+    order = candidate_courts(courts[0])
+    screenshot = pyautogui.screenshot()
+    available = {}
 
-                if check_selected(x, y):
-                    print(f"{court}号场 {t} 选择成功")
+    scan_times = list(times)
+    if ENABLE_MORNING_TEST_FALLBACK:
+        scan_times.append(MORNING_TEST_TIME)
 
-                    # 仅退出当前目标的重试循环，继续选择下一个目标。
-                    break
+    print("开始扫描目标时段（此时尚未弹出底部信息框）")
+    for time_name in scan_times:
+        available[time_name] = []
+        for court in order:
+            if keyboard.is_pressed("esc"):
+                print("检测到 Esc，结束选场")
+                return []
+            state, rgb = get_state(COURT_X[court], TIME_Y[time_name], screenshot)
+            print(f"检测 {court}号场 {time_name}: {state} {rgb}")
+            if state == AVAILABLE:
+                available[time_name].append(court)
 
-                print(f"{court}号场 {t} 未选中，继续尝试")
+    selection_order = ["20:00-21:00", "19:00-20:00"]
+    if ENABLE_MORNING_TEST_FALLBACK and not any(available.get(t) for t in times):
+        print(f"晚场均不可预约，改为选择测试时段 {MORNING_TEST_TIME}")
+        selection_order.append(MORNING_TEST_TIME)
 
-    # 全部配置项处理完毕后，才返回成功。
-    print("所有配置的场地和时段选择完成")
-    return True
+    selected = []
+    for time_name in selection_order:
+        for court in available.get(time_name, []):
+            if keyboard.is_pressed("esc"):
+                print("检测到 Esc，结束选场")
+                return []
+
+            x, y = COURT_X[court], TIME_Y[time_name]
+            state, rgb = get_state(x, y)
+            print(f"点击前复检 {court}号场 {time_name}: {state} {rgb}")
+            if state != AVAILABLE:
+                continue
+
+            click_x = x + COURT_CLICK_OFFSET[0]
+            click_y = y + COURT_CLICK_OFFSET[1]
+            print(f"点击 {court}号场 {time_name} 无文字区域: ({click_x}, {click_y})")
+            pyautogui.click(click_x, click_y)
+            time.sleep(CLICK_WAIT)
+
+            success = click_succeeded(court, time_name)
+            if not success:
+                time.sleep(CLICK_WAIT)
+                success = click_succeeded(court, time_name)
+            if success:
+                print(f"{court}号场 {time_name} 选择成功")
+                selected.append((time_name, court))
+                break
+
+            print(f"{court}号场 {time_name} 未选中，切换下一个候选场地")
+
+    if selected:
+        print("最终选中：" + "，".join(f"{court}号场 {t}" for t, court in selected))
+    else:
+        print("目标时段和早场测试时段均未选中")
+    return selected
+
+
+if __name__ == "__main__":
+    assert candidate_courts(12)[:7] == [12, 13, 11, 14, 10, 15, 9]
+    assert sorted(candidate_courts(1)) == list(COURT_X)
+    print("候选场地顺序自检通过")
