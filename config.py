@@ -2,14 +2,14 @@
 
 # 首选场地编号。当前选场逻辑使用列表中的第一个编号作为中心，
 # 再按“目标、右1、左1、右2、左2……”寻找可预约场地。
-courts = [12]
+courts = [17]
 
 # 扫描的目标时段。正式点击顺序固定为先20点、后19点，以避开底部信息框遮挡。
 times = ["19:00-20:00", "20:00-21:00"]
 
 # 早场测试回退开关。True表示晚场均不可预约时，改选07:30–08:30并继续提交；
 # 这会产生真实预约操作，完成后续流程测试或正式抢晚场前请改回False。
-ENABLE_MORNING_TEST_FALLBACK = True
+ENABLE_MORNING_TEST_FALLBACK = False
 MORNING_TEST_TIME = "07:30-08:30"
 
 
@@ -112,6 +112,18 @@ VERIFY_TOLERANCE = 5
 
 # 验证遮罩消失后必须连续保持无遮罩的时间，防止页面闪烁导致误判验证结束。
 VERIFY_STABLE_SECONDS = 0.8
+
+# 点击提交后等待验证窗口出现的最长时间；超时则按“无需验证”处理并刷新重选。
+VERIFY_APPEAR_TIMEOUT_SECONDS = 2.0
+
+# 检测到验证窗口后，执行一次已录制操作前的等待时间，确保弹窗完成显示。
+VERIFY_PLAY_START_DELAY_SECONDS = 0.5
+
+# 一次已录制操作结束后，等待多久再检查验证遮罩是否仍然存在。
+VERIFY_AFTER_PLAY_WAIT_SECONDS = 1.0
+
+# 首次提示需要手动完成验证后，每隔多久再次检查并重复打印提醒。
+VERIFY_MANUAL_REMINDER_SECONDS = 2.0
 
 # 点击场地后等待页面变色的时间；第一次未成功时，还会再等待一次后补检，但不会重复点击。
 CLICK_WAIT = 0.2
