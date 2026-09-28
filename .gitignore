@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 .vscode/
+build/
+dist/
+WechatBookingBot.spec
+WechatBookingBotPortable.spec
+WechatBookingBotGUI.spec
+9.28备份/

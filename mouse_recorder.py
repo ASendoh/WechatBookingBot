@@ -48,15 +48,25 @@ def record():
 
 
 def play():
-    """回放 record() 保存的鼠标操作，供其他 Python 文件调用。"""
+    """以录制的首次左键按下为起点，按校准窗口比例回放。"""
+    from config import SLIDER_START_POS, WINDOW_SIZE
+
     events = json.loads(ACTION_FILE.read_text(encoding="utf-8"))
+    start = next(((event[2], event[3]) for event in events
+                  if event[1] == "click" and event[4:] == ["left", True]), None)
+    if start is None:
+        raise ValueError("录制轨迹缺少滑块起点的左键按下操作")
+    scale_x, scale_y = WINDOW_SIZE[0] / 2000, WINDOW_SIZE[1] / 1400
     controller = mouse.Controller()
     previous = 0.0
 
     for event in events:
         recorded_time, event_type, x, y, *details = event
         time.sleep(max(0.0, recorded_time - previous))
-        controller.position = (x, y)
+        controller.position = (
+            round(SLIDER_START_POS[0] + (x - start[0]) * scale_x),
+            round(SLIDER_START_POS[1] + (y - start[1]) * scale_y),
+        )
         if event_type == "click":
             button_name, pressed = details
             button = getattr(mouse.Button, button_name)

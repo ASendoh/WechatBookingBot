@@ -1,15 +1,22 @@
 # ==================== 预约目标 ====================
 
+import os
+from pathlib import Path
+
 # 首选场地编号。当前选场逻辑使用列表中的第一个编号作为中心，
 # 再按“目标、右1、左1、右2、左2……”寻找可预约场地。
-courts = [17]
+courts = [int(os.environ.get("WECHAT_BOOKING_COURT", "17"))]
 
 # 扫描的目标时段。正式点击顺序固定为先20点、后19点，以避开底部信息框遮挡。
-times = ["19:00-20:00", "20:00-21:00"]
+times = os.environ.get(
+    "WECHAT_BOOKING_TIMES", "19:00-20:00,20:00-21:00"
+).split(",")
 
 # 早场测试回退开关。True表示晚场均不可预约时，改选07:30–08:30并继续提交；
 # 这会产生真实预约操作，完成后续流程测试或正式抢晚场前请改回False。
-ENABLE_MORNING_TEST_FALLBACK = False
+ENABLE_MORNING_TEST_FALLBACK = (
+    os.environ.get("WECHAT_BOOKING_MORNING_FALLBACK", "0") == "1"
+)
 MORNING_TEST_TIME = "07:30-08:30"
 
 
@@ -67,7 +74,7 @@ SUBMIT_POS = (1911, 1357)
 # “提交预约”按钮内部无文字区域的颜色检测坐标，用于辅助确认20点场地已选中。
 SUBMIT_STATE_POS = (1850, 1357)
 
-# 人工滑块验证出现后，鼠标自动移动到的滑块起点；程序不会自动拖动。
+# 原机 2000×1400 窗口内的滑块起点；校准时优先使用实测点，否则按窗口比例推算。
 SLIDER_START_POS = (762, 678)
 
 # 验证弹窗外灰色遮罩的检测坐标，用于判断验证窗口出现和消失。
@@ -140,12 +147,54 @@ TOMORROW_LOAD_SECONDS = 1.8
 # 刷新页面之前，最多重新双击“第二天”的次数；本阶段最长检测约为次数×上面的等待时间。
 TOMORROW_RETRIES = 5
 
-# 点击顶部刷新按钮后固定等待的时间。刷新只点击一次，不再检测模板或重复刷新；
-# 等待结束后由下一步“选择第二天”的紫色横线和场地检测负责确认页面状态。
+# 点击顶部刷新按钮后固定等待的时间。刷新只点击一次；
+# 等待结束后检查预约页左上角标题，若已回到入口页则尝试重新进入。
 REFRESH_WAIT_SECONDS = 0.1
 
 # 每次点击羽毛球入口后，最多等待预约页面模板出现的时间；不影响顶部刷新等待。
 PAGE_LOAD_SECONDS = 0.1
 
+# 入口点击后页面短暂切换，以及刷新回退后重新进入预约页的最长等待；超时则停止。
+ENTRY_UNKNOWN_GRACE_SECONDS = 1.0
+
 # 调整微信窗口位置和尺寸后，等待页面完成重新排版的时间。
 RESIZE_LAYOUT_WAIT = 0.1
+
+
+# 首次校准后由本机文件覆盖上面的默认坐标；未校准时保留原脚本坐标，方便旧版直接运行。
+ENTRY_WINDOW_RECT = None
+BOOKING_WINDOW_MAXIMIZED = False
+ENTRY_CHECK_REGION = None
+ENTRY_TEMPLATE_PATH = None
+PAGE_CHECK_REGION = (0, 70, 400, 100)
+PAGE_TEMPLATE_PATH = Path(__file__).with_name("booking_template.png")
+CELL_BORDER_DISTANCE = (18, 34)
+
+from calibration import PROFILE_PATH, estimate_slider_start, load_profile
+
+_calibration_path = Path(os.environ.get("WECHAT_BOOKING_CALIBRATION", PROFILE_PATH))
+CALIBRATION_PATH = _calibration_path if _calibration_path.is_file() else None
+if "WECHAT_BOOKING_CALIBRATION" in os.environ and not _calibration_path.is_file():
+    raise FileNotFoundError(f"找不到本机校准文件：{_calibration_path}")
+if _calibration_path.exists():
+    _profile = load_profile(_calibration_path)
+    ENTRY_WINDOW_RECT = tuple(_profile["ENTRY_WINDOW_RECT"])
+    BOOKING_WINDOW_MAXIMIZED = _profile.get("BOOKING_WINDOW_MAXIMIZED", False)
+    ENTRY_CHECK_REGION = tuple(_profile["ENTRY_CHECK_REGION"])
+    ENTRY_TEMPLATE_PATH = _calibration_path.with_name("booking_entry.png")
+    WINDOW_POS = tuple(_profile["BOOKING_WINDOW_RECT"][:2])
+    WINDOW_SIZE = tuple(_profile["BOOKING_WINDOW_RECT"][2:])
+    COURT_X = {int(number): x for number, x in _profile["COURT_X"].items()}
+    TIME_Y = _profile["TIME_Y"]
+    COURT_CLICK_OFFSET = tuple(_profile["COURT_CLICK_OFFSET"])
+    STATE_SAMPLE_OFFSETS = tuple(map(tuple, _profile["STATE_SAMPLE_OFFSETS"]))
+    STATE_SAMPLE_SIZE = _profile["STATE_SAMPLE_SIZE"]
+    CELL_BORDER_DISTANCE = tuple(_profile["CELL_BORDER_DISTANCE"])
+    PAGE_CHECK_REGION = tuple(_profile["PAGE_CHECK_REGION"])
+    PAGE_TEMPLATE_PATH = _calibration_path.with_name("booking_header.png")
+    SLIDER_START_POS = tuple(_profile.get(
+        "SLIDER_START_POS", estimate_slider_start(_profile["BOOKING_WINDOW_RECT"])
+    ))
+    for _name in ("BADMINTON_POS", "TOMORROW_POS", "TOMORROW_SELECTED_POS",
+                  "REFRESH_POS", "SUBMIT_POS", "SUBMIT_STATE_POS", "VERIFY_PIXEL_POS"):
+        globals()[_name] = tuple(_profile[_name])

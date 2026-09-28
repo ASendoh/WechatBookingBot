@@ -2,6 +2,8 @@ import time
 import keyboard
 import pyautogui
 
+from resize_wechat import click_wechat
+
 from check_selected import AVAILABLE, SELECTED, classify_color, get_state
 from config import (
     COURT_X,
@@ -44,10 +46,10 @@ def select_tomorrow() -> bool:
             return False
 
         print(f"第 {attempt} 次点击第二天")
-        pyautogui.click(*TOMORROW_POS)
+        click_wechat(*TOMORROW_POS)
         # 双击间隔由 config.py 的 TOMORROW_DOUBLE_CLICK_INTERVAL 控制。
         time.sleep(TOMORROW_DOUBLE_CLICK_INTERVAL)
-        pyautogui.click(*TOMORROW_POS)
+        click_wechat(*TOMORROW_POS)
 
         # 单次检测等待时长由 config.py 的 TOMORROW_LOAD_SECONDS 控制。
         deadline = time.monotonic() + TOMORROW_LOAD_SECONDS

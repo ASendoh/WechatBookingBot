@@ -3,6 +3,8 @@ import time
 import keyboard
 import pyautogui
 
+from resize_wechat import click_wechat
+
 from config import POLL_INTERVAL, REFRESH_POS, REFRESH_WAIT_SECONDS
 
 
@@ -12,7 +14,7 @@ def refresh_booking():
         return False
 
     print("点击微信顶部刷新按钮")
-    pyautogui.click(*REFRESH_POS)
+    click_wechat(*REFRESH_POS)
 
     deadline = time.monotonic() + REFRESH_WAIT_SECONDS
     while time.monotonic() < deadline:
@@ -21,5 +23,5 @@ def refresh_booking():
             return False
         time.sleep(POLL_INTERVAL)
 
-    print("刷新等待结束，下一步重新点击第二天")
+    print("刷新等待结束，准备确认预约页面")
     return True

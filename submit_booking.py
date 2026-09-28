@@ -2,6 +2,8 @@ import pyautogui
 import keyboard
 import time
 
+from resize_wechat import click_wechat
+
 from config import SLIDER_START_POS, SUBMIT_POS
 from mouse_recorder import play
 
@@ -12,7 +14,7 @@ def submit_booking() -> bool:
         return False
 
     print("点击提交预约")
-    pyautogui.click(*SUBMIT_POS)
+    click_wechat(*SUBMIT_POS)
     print("提交预约点击完成")
     #pyautogui.moveTo(*SLIDER_START_POS)
 

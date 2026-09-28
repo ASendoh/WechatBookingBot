@@ -1,0 +1,456 @@
+"""可见窗口版：设置每天的预约计划，到点启动现有 main.py。"""
+
+import ctypes
+from ctypes import wintypes
+from datetime import datetime, timedelta
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tkinter as tk
+from tkinter import messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
+
+import pyautogui
+
+from calibration import PROFILE_PATH, estimate_slider_start, load_profile
+from calibration_ui import CalibrationWindow
+
+
+APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WechatBookingBot"
+SETTINGS_FILE = APP_DIR / "settings.json"
+LOG_FILE = APP_DIR / "scheduled_run.log"
+PROJECT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
+TIME_MODES = {
+    "19:00-21:00": (["19:00-20:00", "20:00-21:00"], False),
+    "仅19:00-20:00": (["19:00-20:00"], False),
+    "仅20:00-21:00": (["20:00-21:00"], False),
+}
+
+
+def validate_settings(court_text, time_mode, start_time):
+    if time_mode in ("晚场", "晚场（先20点、后19点）"):
+        time_mode = "19:00-21:00"  # 兼容已保存的旧版设置。
+    if not re.fullmatch(r"\d{1,2}", court_text.strip()):
+        raise ValueError("场地号必须是 1～17 的整数")
+    court = int(court_text)
+    if not 1 <= court <= 17:
+        raise ValueError("场地号必须是 1～17 的整数")
+    if time_mode not in TIME_MODES:
+        raise ValueError("请选择预约时段")
+    if start_time is not None:  # 测试运行不使用定时输入。
+        start_time = start_time.strip()
+        if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", start_time):
+            raise ValueError("启动时间请填写 HH:MM:SS，例如 07:59:40")
+        try:
+            datetime.strptime(start_time, "%H:%M:%S")
+        except ValueError as error:
+            raise ValueError("启动时间无效，请填写 00:00:00～23:59:59") from error
+    return {"court": court, "time_mode": time_mode, "start_time": start_time}
+
+
+def next_start(now, start_time):
+    hour, minute, second = map(int, start_time.split(":"))
+    target = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+    return target if target > now else target + timedelta(days=1)
+
+
+def calibration_warnings():
+    profile = load_profile()
+    width, height = pyautogui.size()
+    for name in ("ENTRY_WINDOW_RECT", "BOOKING_WINDOW_RECT", "ENTRY_CHECK_REGION",
+                 "PAGE_CHECK_REGION"):
+        x, y, w, h = profile[name]
+        if x + w <= 0 or y + h <= 0 or x >= width or y >= height:
+            raise ValueError(f"当前屏幕容不下校准的 {name}，请重新校准")
+        if name.endswith("CHECK_REGION") and (x < 0 or y < 0 or x + w > width or y + h > height):
+            raise ValueError(f"{name} 超出当前屏幕，请重新校准")
+    for name in ("BADMINTON_POS", "TOMORROW_POS", "TOMORROW_SELECTED_POS",
+                 "REFRESH_POS", "SUBMIT_POS", "SUBMIT_STATE_POS", "VERIFY_PIXEL_POS"):
+        x, y = profile[name]
+        if not (0 <= x < width and 0 <= y < height):
+            raise ValueError(f"{name} 超出当前屏幕，请重新校准")
+    slider_x, slider_y = profile.get(
+        "SLIDER_START_POS", estimate_slider_start(profile["BOOKING_WINDOW_RECT"])
+    )
+    if not (0 <= slider_x < width and 0 <= slider_y < height):
+        raise ValueError("滑块起点超出当前屏幕，请重新校准")
+    offset_x, offset_y = profile["COURT_CLICK_OFFSET"]
+    if any(not 0 <= x + offset_x < width for x in profile["COURT_X"].values()):
+        raise ValueError("场地列超出当前屏幕，请重新校准")
+    if any(not 0 <= y + offset_y < height for y in profile["TIME_Y"].values()):
+        raise ValueError("时段行超出当前屏幕，请重新校准")
+    if tuple(profile["SCREEN_SIZE"]) != (width, height):
+        return ["屏幕分辨率与校准时不同，请核对点击位置并重新校准。"]
+    return []
+
+
+class BookingWindow:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("WechatBookingBot")
+        self.root.configure(bg="#F6F8FC")
+        self.root.minsize(720, 600)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self.armed = False
+        self.child = None
+        self.target = None
+        self.settings = None
+        self.warnings = []
+        self.log_pending = False
+        self.log_offset = None
+
+        self.court = tk.StringVar(value="17")
+        self.time_mode = tk.StringVar(value=next(iter(TIME_MODES)))
+        self.start_time = tk.StringVar(value="07:59:40")
+        self.status = tk.StringVar(value="未启动")
+
+        style = ttk.Style(self.root)
+        style.configure("Booking.TButton", font=("Microsoft YaHei UI", 10), padding=(10, 7))
+
+        frame = tk.Frame(self.root, bg="#F6F8FC", padx=20, pady=16)
+        frame.grid(sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        tk.Label(frame, text="WechatBookingBot", bg="#F6F8FC", fg="#18253B",
+                 font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        tk.Label(frame, text="每天定时预约，也可立即测试完整流程", bg="#F6F8FC", fg="#66758A",
+                 font=("Microsoft YaHei UI", 9)).grid(row=1, column=0, sticky="w", pady=(0, 12))
+
+        notice = tk.Frame(frame, bg="#EAF2FF", highlightbackground="#C9DBF7",
+                          highlightthickness=1)
+        notice.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        tk.Frame(notice, bg="#3975E6", width=4).pack(side="left", fill="y")
+        notice_text = tk.Frame(notice, bg="#EAF2FF", padx=14, pady=10)
+        notice_text.pack(side="left", fill="x", expand=True)
+        tk.Label(notice_text, text="运行前请准备微信", bg="#EAF2FF", fg="#234A88",
+                 font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(0, 5))
+        for line in (
+            "1. 在微信打开场地预约窗口，进入“体育中心”，让“羽毛球（南京校区）”入口显示出来。",
+            "2. 停留在入口页面，不要提前点进羽毛球预约。",
+            "3. 最小化原微信聊天主窗口；保留场地预约窗口打开，不要用其他窗口遮挡。",
+        ):
+            tk.Label(notice_text, text=line, bg="#EAF2FF", fg="#2D4263",
+                     font=("Microsoft YaHei UI", 10), anchor="w", justify="left",
+                     wraplength=650).pack(anchor="w", pady=1)
+
+        settings = tk.Frame(frame, bg="white", padx=14, pady=12,
+                            highlightbackground="#E1E7F0", highlightthickness=1)
+        settings.grid(row=3, column=0, sticky="ew")
+        for column in range(3):
+            settings.columnconfigure(column, weight=1, uniform="setting")
+        tk.Label(settings, text="预约设置", bg="white", fg="#18253B",
+                 font=("Microsoft YaHei UI", 11, "bold")).grid(
+                     row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        for column, label in enumerate(("首选场地号（1～17）", "预约时段", "每天启动时间（HH:MM:SS）")):
+            tk.Label(settings, text=label, bg="white", fg="#4B5B72",
+                     font=("Microsoft YaHei UI", 9)).grid(
+                         row=1, column=column, sticky="w", padx=(0, 12))
+        self.court_entry = ttk.Entry(settings, textvariable=self.court, width=10)
+        self.court_entry.grid(row=2, column=0, sticky="ew", padx=(0, 12), pady=(4, 0))
+        self.time_box = ttk.Combobox(
+            settings, textvariable=self.time_mode, values=list(TIME_MODES),
+            state="readonly", width=20,
+        )
+        self.time_box.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=(4, 0))
+        self.time_entry = ttk.Entry(settings, textvariable=self.start_time, width=14)
+        self.time_entry.grid(row=2, column=2, sticky="ew", pady=(4, 0))
+        buttons = tk.Frame(frame, bg="#F6F8FC")
+        buttons.grid(row=4, column=0, sticky="w", pady=(14, 0))
+        self.start_button = ttk.Button(buttons, text="启动定时", command=self.start,
+                                       style="Booking.TButton")
+        self.start_button.pack(side="left")
+        self.test_button = ttk.Button(buttons, text="测试运行", command=self.test_run,
+                                      style="Booking.TButton")
+        self.test_button.pack(side="left", padx=(8, 0))
+        self.stop_button = ttk.Button(
+            buttons, text="停止", command=self.stop, state="disabled", style="Booking.TButton"
+        )
+        self.stop_button.pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text="首次校准 / 重新校准", command=self.calibrate,
+                   style="Booking.TButton").pack(side="left", padx=(8, 0))
+        tk.Label(frame, textvariable=self.status, bg="#E8EEF8", fg="#254878",
+                 anchor="w", padx=11, pady=8, wraplength=650,
+                 font=("Microsoft YaHei UI", 10)).grid(
+                     row=5, column=0, sticky="ew", pady=(14, 10)
+        )
+        tk.Label(frame, text="运行记录", bg="#F6F8FC", fg="#4B5B72",
+                 font=("Microsoft YaHei UI", 10, "bold")).grid(
+                     row=6, column=0, sticky="nw", pady=(0, 4))
+        self.progress = ScrolledText(
+            frame, width=72, height=9, wrap="word", state="disabled",
+            font=("Microsoft YaHei UI", 10),
+        )
+        self.progress.grid(row=7, column=0, sticky="nsew")
+        frame.rowconfigure(7, weight=1)
+        self.progress.tag_configure("timestamp", foreground="#777777")
+        tk.Label(frame, text="程序可最小化；关闭窗口会停止定时。运行时窗口会自动最小化。",
+                 bg="#F6F8FC", fg="#748197", font=("Microsoft YaHei UI", 9)).grid(
+                     row=8, column=0, sticky="w", pady=(8, 0)
+        )
+
+        self.load_settings()
+        self.root.after(200, self.tick)
+
+    def calibrate(self):
+        if self.armed:
+            messagebox.showinfo("校准", "请先停止当前运行或预约计划，再重新校准。", parent=self.root)
+            return
+        CalibrationWindow(self.root, lambda: self.status.set("坐标校准已保存"))
+
+    def load_settings(self):
+        try:
+            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            settings = validate_settings(
+                str(saved["court"]), saved["time_mode"], saved["start_time"]
+            )
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, KeyError, TypeError):
+            self.status.set("设置文件无效，已使用默认值")
+            return
+        self.court.set(str(settings["court"]))
+        self.time_mode.set(settings["time_mode"])
+        self.start_time.set(settings["start_time"])
+
+    def start(self):
+        try:
+            settings = validate_settings(
+                self.court.get(), self.time_mode.get(), self.start_time.get()
+            )
+            self.warnings = calibration_warnings()
+            APP_DIR.mkdir(parents=True, exist_ok=True)
+            temporary = SETTINGS_FILE.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            temporary.replace(SETTINGS_FILE)
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            if isinstance(error, FileNotFoundError) and not PROFILE_PATH.exists():
+                error = "尚未校准，请先点击“首次校准 / 重新校准”。"
+            messagebox.showerror("输入有误", str(error), parent=self.root)
+            return
+        except OSError as error:
+            messagebox.showerror("无法保存设置", str(error), parent=self.root)
+            return
+
+        self.settings = settings
+        self.target = next_start(datetime.now(), settings["start_time"])
+        self.set_active(True)
+        self.status.set(f"等待 {self.target:%m月%d日 %H:%M:%S} 自动执行")
+
+    def test_run(self):
+        if self.armed:
+            return
+        try:
+            settings = validate_settings(self.court.get(), self.time_mode.get(), None)
+        except ValueError as error:
+            messagebox.showerror("输入有误", str(error), parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "确认测试运行", "将立即执行真实预约流程；晚场没有可预约场地时，会改选 07:30–08:30 并提交预约。确定开始吗？",
+            parent=self.root,
+        ):
+            return
+        self.settings = settings
+        self.target = None
+        if self.launch():
+            self.set_active(True)
+
+    def set_active(self, active):
+        self.armed = active
+        self.court_entry.configure(state="disabled" if active else "normal")
+        self.time_box.configure(state="disabled" if active else "readonly")
+        self.time_entry.configure(state="disabled" if active else "normal")
+        self.start_button.configure(state="disabled" if active else "normal")
+        self.test_button.configure(state="disabled" if active else "normal")
+        self.stop_button.configure(state="normal" if active else "disabled")
+
+    def stop(self):
+        if self.child is not None and self.child.poll() is None:
+            if not messagebox.askyesno(
+                "确认停止", "预约流程正在运行，立即停止可能中断当前操作。确定停止吗？",
+                parent=self.root,
+            ):
+                return False
+            subprocess.run(
+                ["taskkill", "/PID", str(self.child.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW, check=False,
+            )
+            if self.child.poll() is None:
+                self.child.terminate()
+        self.child = None
+        self.target = None
+        self.read_progress()
+        self.log_offset = None
+        self.set_active(False)
+        self.status.set("已停止")
+        self.show_warnings()
+        return True
+
+    def show_warnings(self):
+        if self.log_pending:
+            try:
+                self.warnings.extend(
+                    line.removeprefix("校准警告：").strip()
+                    for line in LOG_FILE.read_text(encoding="utf-8").splitlines()
+                    if line.startswith("校准警告：")
+                )
+            except OSError:
+                pass
+            self.log_pending = False
+        if self.warnings:
+            self.root.deiconify()
+            messagebox.showwarning("校准提醒", "\n".join(self.warnings), parent=self.root)
+            self.warnings.clear()
+
+    def read_progress(self):
+        if self.log_offset is None:
+            return
+        lines = []
+        try:
+            with LOG_FILE.open("r", encoding="utf-8", errors="replace") as log:
+                log.seek(self.log_offset)
+                while True:
+                    line = log.readline()
+                    if not line or not line.endswith("\n"):
+                        break
+                    lines.append(line)
+                    self.log_offset = log.tell()
+        except OSError:
+            return
+        if lines:
+            self.progress.configure(state="normal")
+            for line in lines:
+                self.progress.insert(
+                    "end", f"[{datetime.now():%Y-%m-%d %H:%M:%S}]  ", "timestamp"
+                )
+                self.progress.insert("end", line)
+            self.progress.see("end")
+            self.progress.configure(state="disabled")
+            if self.child is not None:
+                self.status.set(f"正在执行：{lines[-1].strip()}")
+
+    def launch(self):
+        self.log_offset = None
+        self.progress.configure(state="normal")
+        self.progress.delete("1.0", "end")
+        self.progress.configure(state="disabled")
+        try:
+            self.warnings = calibration_warnings()
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            self.status.set(f"校准文件失效，本轮未启动：{error}")
+            return False
+        times, fallback = TIME_MODES[self.settings["time_mode"]]
+        env = os.environ.copy()
+        env.update({
+            "WECHAT_BOOKING_COURT": str(self.settings["court"]),
+            "WECHAT_BOOKING_TIMES": ",".join(times),
+            "WECHAT_BOOKING_MORNING_FALLBACK": "1" if self.target is None or fallback else "0",
+            "WECHAT_BOOKING_CALIBRATION": str(PROFILE_PATH),
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONIOENCODING": "utf-8",
+        })
+        command = (
+            [sys.executable, "--run-now"]
+            if getattr(sys, "frozen", False)
+            else [sys.executable, str(PROJECT / "main.py")]
+        )
+        try:
+            with LOG_FILE.open("w", encoding="utf-8") as log:
+                self.child = subprocess.Popen(
+                    command, cwd=PROJECT, env=env, stdout=log,
+                    stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+        except OSError as error:
+            self.status.set(f"启动失败：{error}")
+            return False
+        else:
+            ctypes.windll.user32.AllowSetForegroundWindow(self.child.pid)
+            self.root.iconify()  # 子进程取得前台切换权限后再隐藏窗口。
+            self.log_offset = 0
+            self.log_pending = True
+            self.status.set(
+                "测试运行中" if self.target is None
+                else f"预约流程正在运行；下次计划 {self.target:%m月%d日 %H:%M:%S}"
+            )
+            return True
+
+    def tick(self):
+        self.read_progress()
+        if self.child is not None and self.child.poll() is not None:
+            code = self.child.returncode
+            self.child = None
+            self.log_offset = None
+            if self.armed and self.target is None:
+                self.set_active(False)
+                self.root.deiconify()
+                self.status.set(f"测试已结束（退出码 {code}）")
+            elif self.armed:
+                self.status.set(f"本轮已结束（退出码 {code}）；下次计划 {self.target:%m月%d日 %H:%M:%S}")
+            self.show_warnings()
+
+        if self.armed and self.target is not None and datetime.now() >= self.target:
+            now = datetime.now()
+            due = self.target
+            self.target = next_start(now, self.settings["start_time"])
+            if (now - due).total_seconds() <= 20 and self.child is None:
+                self.launch()
+            elif self.child is not None:
+                self.status.set(f"上轮仍在运行，跳过本轮；下次计划 {self.target:%m月%d日 %H:%M:%S}")
+            else:
+                self.status.set(f"已错过本轮启动窗口；下次计划 {self.target:%m月%d日 %H:%M:%S}")
+        self.root.after(200, self.tick)
+
+    def close(self):
+        if not self.armed or self.stop():
+            self.root.destroy()
+
+
+def run_booking():
+    import pyautogui
+    from main import main
+
+    try:
+        main()
+    except (KeyboardInterrupt, pyautogui.FailSafeException):
+        print("程序已由用户紧急停止")
+
+
+def main():
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    mutex = kernel32.CreateMutexW(None, False, "Local\\WechatBookingBotVisibleGUI")
+    if not mutex:
+        raise OSError(ctypes.get_last_error(), "无法创建程序实例锁")
+    if ctypes.get_last_error() == 183:
+        ctypes.windll.user32.MessageBoxW(None, "程序已在运行，请查看任务栏。", "WechatBookingBot", 0)
+        kernel32.CloseHandle(mutex)
+        return
+    try:
+        BookingWindow().root.mainloop()
+    finally:
+        kernel32.CloseHandle(mutex)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--run-now"]:
+        run_booking()
+    elif sys.argv[1:] == ["--check-package"]:
+        import main as booking_main  # noqa: F401
+        from mouse_recorder import ACTION_FILE
+
+        for file in (Path(__file__).with_name("booking_template.png"), ACTION_FILE):
+            if not file.is_file():
+                raise FileNotFoundError(file)
+    else:
+        main()

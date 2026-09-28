@@ -2,6 +2,7 @@ import pyautogui
 from statistics import median
 
 from config import (
+    CELL_BORDER_DISTANCE,
     PURPLE_BLUE_RANGE,
     PURPLE_GREEN_MAX,
     PURPLE_RED_RANGE,
@@ -38,7 +39,7 @@ def classify_samples(colours):
 
 
 def has_cell_border(screenshot, x, y):
-    for distance in range(18, 34):
+    for distance in range(*CELL_BORDER_DISTANCE):
         for sample_y in (y - distance, y + distance):
             r, g, b = screenshot.getpixel((x, sample_y))
             if max((r, g, b)) - min((r, g, b)) <= 5 and 220 <= r <= 245:

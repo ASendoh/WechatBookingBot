@@ -2,6 +2,8 @@ import time
 import keyboard
 import pyautogui
 
+from resize_wechat import click_wechat
+
 from check_selected import AVAILABLE, SELECTED, get_state
 from config import (
     CLICK_WAIT,
@@ -23,6 +25,13 @@ def candidate_courts(target):
             if court in COURT_X:
                 result.append(court)
     return result
+
+
+def booking_order(target_times):
+    return [
+        t for t in ("20:00-21:00", "19:00-20:00", MORNING_TEST_TIME)
+        if t in target_times
+    ]
 
 
 def submit_is_enabled():
@@ -69,7 +78,7 @@ def select_court():
             if state == AVAILABLE:
                 available[time_name].append(court)
 
-    selection_order = ["20:00-21:00", "19:00-20:00"]
+    selection_order = booking_order(times)
     if ENABLE_MORNING_TEST_FALLBACK and not any(available.get(t) for t in times):
         print(f"晚场均不可预约，改为选择测试时段 {MORNING_TEST_TIME}")
         selection_order.append(MORNING_TEST_TIME)
@@ -90,7 +99,7 @@ def select_court():
             click_x = x + COURT_CLICK_OFFSET[0]
             click_y = y + COURT_CLICK_OFFSET[1]
             print(f"点击 {court}号场 {time_name} 无文字区域: ({click_x}, {click_y})")
-            pyautogui.click(click_x, click_y)
+            click_wechat(click_x, click_y)
             time.sleep(CLICK_WAIT)
 
             success = click_succeeded(court, time_name)
@@ -107,7 +116,7 @@ def select_court():
     if selected:
         print("最终选中：" + "，".join(f"{court}号场 {t}" for t, court in selected))
     else:
-        print("目标时段和早场测试时段均未选中")
+        print("目标时段均未选中")
     return selected
 
 

@@ -1,40 +1,28 @@
 import pyautogui
-import cv2
-import numpy as np
-from pathlib import Path
+from PIL import Image
+
+from calibration import template_score
+from config import (ENTRY_CHECK_REGION, ENTRY_TEMPLATE_PATH,
+                    PAGE_CHECK_REGION, PAGE_TEMPLATE_PATH)
+
+
+def matches_region(region, path, verbose=True):
+    screen = pyautogui.screenshot(region=region)
+    with Image.open(path) as template:
+        max_value = template_score(screen, template)
+    if verbose:
+        print("页面匹配度：", round(max_value, 3))
+    return max_value > 0.85
 
 
 def check_page(verbose=True):
-    # 截取微信区域
-    screen = pyautogui.screenshot(
-        region=(0, 70, 400, 100)
-    )
+    return matches_region(PAGE_CHECK_REGION, PAGE_TEMPLATE_PATH, verbose)
 
-    # PIL转OpenCV格式
-    screen = cv2.cvtColor(
-        np.array(screen),
-        cv2.COLOR_RGB2BGR
-    )
 
-    # 读取模板
-    template = cv2.imread(str(Path(__file__).with_name("booking_template.png")))
-    if template is None:
-        raise FileNotFoundError("找不到 booking_template.png")
-
-    # 模板匹配
-    result = cv2.matchTemplate(
-        screen,
-        template,
-        cv2.TM_CCOEFF_NORMED
-    )
-
-    # 最大匹配值
-    _, max_value, _, _ = cv2.minMaxLoc(result)
-
-    if verbose:
-        print("预约页面匹配度：", round(max_value, 3))
-
-    return max_value > 0.85
+def check_entry(verbose=True):
+    if ENTRY_TEMPLATE_PATH is None:  # 未校准的 main.py 保持旧版手动测试方式。
+        return True
+    return matches_region(ENTRY_CHECK_REGION, ENTRY_TEMPLATE_PATH, verbose)
 
 
 if __name__ == "__main__":

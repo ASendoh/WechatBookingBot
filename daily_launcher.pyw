@@ -7,7 +7,11 @@ import sys
 import time
 
 
-PROJECT = Path(__file__).resolve().parent
+PROJECT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 
 
 def next_start(now):
@@ -27,7 +31,9 @@ def main():
         ):
             with (PROJECT / "scheduled_run.log").open("w", encoding="utf-8") as log:
                 child = subprocess.Popen(
-                    [sys.executable, str(PROJECT / "main.py")],
+                    [sys.executable, "--run-now"]
+                    if getattr(sys, "frozen", False)
+                    else [sys.executable, str(PROJECT / "main.py")],
                     cwd=PROJECT,
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -37,4 +43,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--check-package"]:
+        # 只检查依赖和资源是否进入打包结果，不会点击微信。
+        import main as booking_main  # noqa: F401
+        from mouse_recorder import ACTION_FILE
+
+        for file in (Path(__file__).with_name("booking_template.png"), ACTION_FILE):
+            if not file.is_file():
+                raise FileNotFoundError(file)
+        print("打包自检通过")
+    elif sys.argv[1:] == ["--run-now"]:
+        import pyautogui
+        from main import main as run_booking
+
+        try:
+            run_booking()
+        except (KeyboardInterrupt, pyautogui.FailSafeException):
+            print("程序已由用户紧急停止")
+    else:
+        main()
