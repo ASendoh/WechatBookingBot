@@ -2,17 +2,20 @@ import time
 
 import pyautogui
 import keyboard
+import win32gui
 
 from calibration import check_layout, load_profile
 from check_page import check_page
+from check_selected import SELECTED, classify_color
 from check_verify import wait_verify
-from config import CALIBRATION_PATH, ENTRY_UNKNOWN_GRACE_SECONDS, POLL_INTERVAL
+from config import (CALIBRATION_PATH, ENTRY_UNKNOWN_GRACE_SECONDS,
+                    PAYMENT_APPEAR_TIMEOUT_SECONDS, POLL_INTERVAL)
 from enter_booking import enter_booking
 from move_mouse import move_mouse
 from refresh_booking import refresh_booking
 from resize_wechat import resize_wechat, restore_entry_window
 from select_court import select_court
-from select_tomorrow_test import select_tomorrow
+from select_tomorrow_test import SOLD_OUT, select_tomorrow
 from submit_booking import submit_booking
 
 # 关闭 PyAutoGUI 操作后的统一暂停，必要的等待由各步骤显式控制。
@@ -20,6 +23,29 @@ pyautogui.PAUSE = 0
 
 # 保留 PyAutoGUI 的紧急停止功能。
 pyautogui.FAILSAFE = True
+
+
+def payment_page(screenshot, rect):
+    left, top, right, bottom = rect
+    y = bottom - 25
+    xs = [left + round((right - left) * fraction) for fraction in (0.1, 0.3, 0.7, 0.9)]
+    if not (0 <= y < screenshot.height and all(0 <= x < screenshot.width for x in xs)):
+        return False
+    return all(classify_color(screenshot.getpixel((x, y))) == SELECTED for x in xs)
+
+
+def wait_payment():
+    print(f"验证已完成，最多等待 {PAYMENT_APPEAR_TIMEOUT_SECONDS} 秒检测付款页面")
+    deadline = time.monotonic() + PAYMENT_APPEAR_TIMEOUT_SECONDS
+    while not keyboard.is_pressed("esc"):
+        hwnd = win32gui.FindWindow(None, "微信")
+        if hwnd and win32gui.GetForegroundWindow() == hwnd:
+            if payment_page(pyautogui.screenshot(), win32gui.GetWindowRect(hwnd)):
+                return True
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(POLL_INTERVAL)
+    return False
 
 
 def recover_page():
@@ -71,6 +97,10 @@ def main():
                 print(f"校准警告：{warning}", flush=True)
             layout_checked = True
 
+        if tomorrow_ready == SOLD_OUT:
+            print("本轮结果：目标时段已抢空，停止今天的预约")
+            break
+
         if not tomorrow_ready:
             if not recover_page():
                 break
@@ -85,8 +115,17 @@ def main():
                 break
             continue
 
-        if not submit_booking() or not wait_verify():
+        if not submit_booking():
             break
+        verified = wait_verify()
+        if verified is False:
+            break
+        if verified is True and wait_payment():
+            print("本轮结果：已进入确认订单页面，停止今天的预约；请自行完成付款")
+            break
+        if keyboard.is_pressed("esc"):
+            break
+        print("未确认付款页面，刷新后重新选择")
         if not recover_page():
             break
 

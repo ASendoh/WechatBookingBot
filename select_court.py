@@ -29,7 +29,7 @@ def candidate_courts(target):
 
 def booking_order(target_times):
     return [
-        t for t in ("20:00-21:00", "19:00-20:00", MORNING_TEST_TIME)
+        t for t in ("20:00-21:00", "19:00-20:00", "11:30-12:30", "10:30-11:30", MORNING_TEST_TIME)
         if t in target_times
     ]
 
@@ -80,7 +80,7 @@ def select_court():
 
     selection_order = booking_order(times)
     if ENABLE_MORNING_TEST_FALLBACK and not any(available.get(t) for t in times):
-        print(f"晚场均不可预约，改为选择测试时段 {MORNING_TEST_TIME}")
+        print(f"目标时段均不可预约，改为选择测试时段 {MORNING_TEST_TIME}")
         selection_order.append(MORNING_TEST_TIME)
 
     selected = []

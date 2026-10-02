@@ -12,8 +12,8 @@ times = os.environ.get(
     "WECHAT_BOOKING_TIMES", "19:00-20:00,20:00-21:00"
 ).split(",")
 
-# 早场测试回退开关。True表示晚场均不可预约时，改选07:30–08:30并继续提交；
-# 这会产生真实预约操作，完成后续流程测试或正式抢晚场前请改回False。
+# 测试回退开关。True表示所选时段均不可预约时，改选07:30–08:30并继续提交；
+# 这会产生真实预约操作，完成测试后请改回False。
 ENABLE_MORNING_TEST_FALLBACK = (
     os.environ.get("WECHAT_BOOKING_MORNING_FALLBACK", "0") == "1"
 )
@@ -47,8 +47,7 @@ COURT_X = {
     17: 1878,
 }
 
-# 两个目标时段格子的纵向中心坐标。
-# 19点坐标已从未遮挡截图确认；20点坐标按相同行距推算，待可预约时再直接确认。
+# 未校准时的旧版时段坐标。新增的 10:30、11:30 必须经校准后写入 TIME_Y。
 TIME_Y = {
     "07:30-08:30": 380,
     "19:00-20:00": 1189,
@@ -74,8 +73,8 @@ SUBMIT_POS = (1911, 1357)
 # “提交预约”按钮内部无文字区域的颜色检测坐标，用于辅助确认20点场地已选中。
 SUBMIT_STATE_POS = (1850, 1357)
 
-# 原机 2000×1400 窗口内的滑块起点；校准时优先使用实测点，否则按窗口比例推算。
-SLIDER_START_POS = (762, 678)
+# 未校准时按实测新比例映射到默认 2000×1400 窗口；校准后优先使用实测点。
+SLIDER_START_POS = (782, 684)
 
 # 验证弹窗外灰色遮罩的检测坐标，用于判断验证窗口出现和消失。
 VERIFY_PIXEL_POS = (1949, 907)
@@ -120,8 +119,11 @@ VERIFY_TOLERANCE = 5
 # 验证遮罩消失后必须连续保持无遮罩的时间，防止页面闪烁导致误判验证结束。
 VERIFY_STABLE_SECONDS = 0.8
 
-# 点击提交后等待验证窗口出现的最长时间；超时则按“无需验证”处理并刷新重选。
+# 点击提交后等待验证窗口出现的最长时间；超时视为异常并刷新重选。
 VERIFY_APPEAR_TIMEOUT_SECONDS = 2.0
+
+# 验证遮罩消失后，最多等待付款页面出现的时间；超时则刷新重选。
+PAYMENT_APPEAR_TIMEOUT_SECONDS = 1.0
 
 # 检测到验证窗口后，执行一次已录制操作前的等待时间，确保弹窗完成显示。
 VERIFY_PLAY_START_DELAY_SECONDS = 0.1
@@ -143,6 +145,9 @@ TOMORROW_DOUBLE_CLICK_INTERVAL = 0.2
 
 # 每轮双击“第二天”后，最多等待紫色横线和晚间可预约格子同时出现的时间。
 TOMORROW_LOAD_SECONDS = 1.8
+
+# 目标时段所有格子持续呈灰色多久才判定已抢空；防止把加载占位格误判为结果。
+SOLD_OUT_CONFIRM_SECONDS = 1.0
 
 # 刷新页面之前，最多重新双击“第二天”的次数；本阶段最长检测约为次数×上面的等待时间。
 TOMORROW_RETRIES = 5
@@ -168,6 +173,7 @@ ENTRY_CHECK_REGION = None
 ENTRY_TEMPLATE_PATH = None
 PAGE_CHECK_REGION = (0, 70, 400, 100)
 PAGE_TEMPLATE_PATH = Path(__file__).with_name("booking_template.png")
+PAGE_BACKGROUND_POINT = None
 CELL_BORDER_DISTANCE = (18, 34)
 
 from calibration import PROFILE_PATH, estimate_slider_start, load_profile
@@ -192,6 +198,8 @@ if _calibration_path.exists():
     CELL_BORDER_DISTANCE = tuple(_profile["CELL_BORDER_DISTANCE"])
     PAGE_CHECK_REGION = tuple(_profile["PAGE_CHECK_REGION"])
     PAGE_TEMPLATE_PATH = _calibration_path.with_name("booking_header.png")
+    if "PAGE_BACKGROUND_POINT" in _profile:
+        PAGE_BACKGROUND_POINT = tuple(_profile["PAGE_BACKGROUND_POINT"])
     SLIDER_START_POS = tuple(_profile.get(
         "SLIDER_START_POS", estimate_slider_start(_profile["BOOKING_WINDOW_RECT"])
     ))

@@ -14,7 +14,7 @@ def test_verify_appear_timeout():
     check_verify.keyboard.is_pressed = lambda _key: False
     check_verify.check_verify = lambda: False
 
-    assert check_verify.wait_verify() is True
+    assert check_verify.wait_verify() is None
     assert 2.0 <= now < 2.2
 
 

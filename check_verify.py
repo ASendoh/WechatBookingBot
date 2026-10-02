@@ -33,6 +33,7 @@ def wait_or_stop(seconds):
 
 
 def wait_verify():
+    """True=验证结束，None=未出现窗口需重试，False=用户停止。"""
     print("等待验证窗口出现...")
     appear_deadline = time.monotonic() + VERIFY_APPEAR_TIMEOUT_SECONDS
     while not keyboard.is_pressed("esc"):
@@ -51,7 +52,7 @@ def wait_verify():
             break
         if time.monotonic() >= appear_deadline:
             print(f"{VERIFY_APPEAR_TIMEOUT_SECONDS}秒内未检测到验证窗口，刷新后重新选择")
-            return True
+            return None
         time.sleep(POLL_INTERVAL)
     else:
         print("检测到 Esc，停止等待验证")

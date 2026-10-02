@@ -10,6 +10,7 @@ from config import (
     ENABLE_MORNING_TEST_FALLBACK,
     MORNING_TEST_TIME,
     POLL_INTERVAL,
+    SOLD_OUT_CONFIRM_SECONDS,
     TIME_Y,
     TOMORROW_DOUBLE_CLICK_INTERVAL,
     TOMORROW_LOAD_SECONDS,
@@ -19,13 +20,18 @@ from config import (
     times,
 )
 
+SOLD_OUT = "已抢空"
+
 
 def tomorrow_is_selected(screenshot):
-    x, y = TOMORROW_SELECTED_POS
+    click_x, _ = TOMORROW_POS
+    line_x, y = TOMORROW_SELECTED_POS
+    # 旧校准可能误取左侧“今天”的横线；两点相距太远时以第二天点击点为准。
+    x = line_x if abs(line_x - click_x) <= 45 else click_x
     return any(
         classify_color(screenshot.getpixel((sample_x, sample_y))) == SELECTED
-        for sample_x in range(x - 12, x + 13)
-        for sample_y in range(y - 3, y + 4)
+        for sample_x in range(x - 30, x + 31)
+        for sample_y in range(y - 10, y + 11)
     )
 
 
@@ -39,7 +45,21 @@ def find_available_court(screenshot, time_names):
     return None
 
 
-def select_tomorrow() -> bool:
+def all_courts_gray(screenshot, time_names):
+    # 格子须为浅灰，格间须为白色；整片灰色遮罩不能算已加载的网格。
+    for time_name in time_names:
+        gap_x = (COURT_X[1] + COURT_X[2]) // 2
+        if min(screenshot.getpixel((gap_x, TIME_Y[time_name]))) < 250:
+            return False
+        for x in COURT_X.values():
+            _, colours = get_state(x, TIME_Y[time_name], screenshot)
+            if not all(220 <= min(rgb) <= max(rgb) <= 245
+                       and max(rgb) - min(rgb) <= 5 for rgb in colours):
+                return False
+    return True
+
+
+def select_tomorrow():
     for attempt in range(1, TOMORROW_RETRIES + 1):
         if keyboard.is_pressed("esc"):
             print("检测到 Esc，停止选择第二天")
@@ -55,6 +75,7 @@ def select_tomorrow() -> bool:
         deadline = time.monotonic() + TOMORROW_LOAD_SECONDS
         selected_message_shown = False
         morning_test_ready = None
+        gray_since = None
         while time.monotonic() < deadline:
             if keyboard.is_pressed("esc"):
                 print("检测到 Esc，停止选择第二天")
@@ -71,14 +92,23 @@ def select_tomorrow() -> bool:
                 morning_test_ready = morning_test_ready or find_available_court(
                     screenshot, (MORNING_TEST_TIME,)
                 )
+            scan_times = (*times, MORNING_TEST_TIME) if ENABLE_MORNING_TEST_FALLBACK else times
+            if all_courts_gray(screenshot, scan_times):
+                if gray_since is None:
+                    gray_since = time.monotonic()
+                if time.monotonic() - gray_since >= SOLD_OUT_CONFIRM_SECONDS:
+                    print("目标时段全部场地持续灰色，判定已抢空")
+                    return SOLD_OUT
+            else:
+                gray_since = None
             if not selected_message_shown:
-                print("第二天标签已选中，但晚间可预约场地尚未加载")
+                print("第二天标签已选中，但目标时段可预约场地尚未加载")
                 selected_message_shown = True
             time.sleep(POLL_INTERVAL)
 
         if morning_test_ready:
             print(
-                f"晚场均不可预约，启用早场测试："
+                f"目标时段均不可预约，启用早场测试："
                 f"{morning_test_ready[1]}号场 {morning_test_ready[0]} 可预约"
             )
             return True

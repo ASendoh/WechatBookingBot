@@ -1,4 +1,4 @@
-"""可见窗口版：设置每天的预约计划，到点启动现有 main.py。"""
+"""托盘窗口版：设置每天的预约计划，到点启动现有 main.py。"""
 
 import ctypes
 from ctypes import wintypes
@@ -6,14 +6,18 @@ from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
+from queue import Empty, SimpleQueue
 import re
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 import pyautogui
+import pystray
+from PIL import Image, ImageDraw
 
 from calibration import PROFILE_PATH, estimate_slider_start, load_profile
 from calibration_ui import CalibrationWindow
@@ -31,6 +35,9 @@ TIME_MODES = {
     "19:00-21:00": (["19:00-20:00", "20:00-21:00"], False),
     "仅19:00-20:00": (["19:00-20:00"], False),
     "仅20:00-21:00": (["20:00-21:00"], False),
+    "10:30-12:30": (["10:30-11:30", "11:30-12:30"], False),
+    "仅10:30-11:30": (["10:30-11:30"], False),
+    "仅11:30-12:30": (["11:30-12:30"], False),
 }
 
 
@@ -61,8 +68,11 @@ def next_start(now, start_time):
     return target if target > now else target + timedelta(days=1)
 
 
-def calibration_warnings():
+def calibration_warnings(required_times=()):
     profile = load_profile()
+    missing = set(required_times) - set(profile["TIME_Y"])
+    if missing:
+        raise ValueError(f"所选时段 {', '.join(sorted(missing))} 尚未校准，请重新校准坐标")
     width, height = pyautogui.size()
     for name in ("ENTRY_WINDOW_RECT", "BOOKING_WINDOW_RECT", "ENTRY_CHECK_REGION",
                  "PAGE_CHECK_REGION"):
@@ -107,6 +117,8 @@ class BookingWindow:
         self.warnings = []
         self.log_pending = False
         self.log_offset = None
+        self.result = None
+        self.tray_actions = SimpleQueue()
 
         self.court = tk.StringVar(value="17")
         self.time_mode = tk.StringVar(value=next(iter(TIME_MODES)))
@@ -176,6 +188,8 @@ class BookingWindow:
         self.stop_button.pack(side="left", padx=(8, 0))
         ttk.Button(buttons, text="首次校准 / 重新校准", command=self.calibrate,
                    style="Booking.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text="补充上午坐标", command=self.calibrate_morning,
+                   style="Booking.TButton").pack(side="left", padx=(8, 0))
         tk.Label(frame, textvariable=self.status, bg="#E8EEF8", fg="#254878",
                  anchor="w", padx=11, pady=8, wraplength=650,
                  font=("Microsoft YaHei UI", 10)).grid(
@@ -191,19 +205,54 @@ class BookingWindow:
         self.progress.grid(row=7, column=0, sticky="nsew")
         frame.rowconfigure(7, weight=1)
         self.progress.tag_configure("timestamp", foreground="#777777")
-        tk.Label(frame, text="程序可最小化；关闭窗口会停止定时。运行时窗口会自动最小化。",
+        tk.Label(frame, text="关闭窗口会隐藏到托盘；从托盘打开界面或退出程序。运行时窗口会自动隐藏。",
                  bg="#F6F8FC", fg="#748197", font=("Microsoft YaHei UI", 9)).grid(
                      row=8, column=0, sticky="w", pady=(8, 0)
         )
 
         self.load_settings()
+        icon_image = Image.new("RGB", (64, 64), "#790079")
+        draw = ImageDraw.Draw(icon_image)
+        draw.ellipse((12, 12, 52, 52), fill="white")
+        draw.ellipse((21, 21, 43, 43), fill="#790079")
+        self.tray_icon = pystray.Icon(
+            "WechatBookingBot", icon_image, "WechatBookingBot",
+            menu=pystray.Menu(
+                pystray.MenuItem("打开界面", lambda *_: self.tray_actions.put("show"), default=True),
+                pystray.MenuItem("退出程序", lambda *_: self.tray_actions.put("quit")),
+            ),
+        )
+        self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+        self.tray_thread.start()
         self.root.after(200, self.tick)
 
     def calibrate(self):
         if self.armed:
             messagebox.showinfo("校准", "请先停止当前运行或预约计划，再重新校准。", parent=self.root)
             return
-        CalibrationWindow(self.root, lambda: self.status.set("坐标校准已保存"))
+        try:
+            previous_profile = load_profile()
+        except FileNotFoundError:
+            previous_profile = None
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            messagebox.showwarning("校准", f"无法读取旧校准，滑块起点不能自动沿用：{error}", parent=self.root)
+            previous_profile = None
+        CalibrationWindow(self.root, lambda: self.status.set("坐标校准已保存"),
+                          previous_profile=previous_profile)
+
+    def calibrate_morning(self):
+        if self.armed:
+            messagebox.showinfo("校准", "请先停止当前运行或预约计划，再补充上午坐标。", parent=self.root)
+            return
+        try:
+            profile = load_profile()
+            if "SLIDER_START_POS" not in profile:
+                raise ValueError("旧校准没有保存滑块起点，请使用完整校准")
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            messagebox.showerror("无法补充坐标", str(error), parent=self.root)
+            return
+        CalibrationWindow(self.root, lambda: self.status.set("上午坐标已保存"),
+                          existing_profile=profile)
 
     def load_settings(self):
         try:
@@ -225,7 +274,7 @@ class BookingWindow:
             settings = validate_settings(
                 self.court.get(), self.time_mode.get(), self.start_time.get()
             )
-            self.warnings = calibration_warnings()
+            self.warnings = calibration_warnings(TIME_MODES[settings["time_mode"]][0])
             APP_DIR.mkdir(parents=True, exist_ok=True)
             temporary = SETTINGS_FILE.with_suffix(".json.tmp")
             temporary.write_text(
@@ -255,7 +304,7 @@ class BookingWindow:
             messagebox.showerror("输入有误", str(error), parent=self.root)
             return
         if not messagebox.askyesno(
-            "确认测试运行", "将立即执行真实预约流程；晚场没有可预约场地时，会改选 07:30–08:30 并提交预约。确定开始吗？",
+            "确认测试运行", "将立即执行真实预约流程；所选时段没有可预约场地时，会改选 07:30–08:30 并提交预约。确定开始吗？",
             parent=self.root,
         ):
             return
@@ -301,7 +350,7 @@ class BookingWindow:
             try:
                 self.warnings.extend(
                     line.removeprefix("校准警告：").strip()
-                    for line in LOG_FILE.read_text(encoding="utf-8").splitlines()
+                    for line in decode_log(LOG_FILE.read_bytes()).splitlines()
                     if line.startswith("校准警告：")
                 )
             except OSError:
@@ -317,19 +366,21 @@ class BookingWindow:
             return
         lines = []
         try:
-            with LOG_FILE.open("r", encoding="utf-8", errors="replace") as log:
+            with LOG_FILE.open("rb") as log:
                 log.seek(self.log_offset)
                 while True:
                     line = log.readline()
-                    if not line or not line.endswith("\n"):
+                    if not line or not line.endswith(b"\n"):
                         break
-                    lines.append(line)
+                    lines.append(decode_log(line).replace("\r\n", "\n"))
                     self.log_offset = log.tell()
         except OSError:
             return
         if lines:
             self.progress.configure(state="normal")
             for line in lines:
+                if line.startswith("本轮结果："):
+                    self.result = line.strip().removeprefix("本轮结果：")
                 self.progress.insert(
                     "end", f"[{datetime.now():%Y-%m-%d %H:%M:%S}]  ", "timestamp"
                 )
@@ -341,11 +392,12 @@ class BookingWindow:
 
     def launch(self):
         self.log_offset = None
+        self.result = None
         self.progress.configure(state="normal")
         self.progress.delete("1.0", "end")
         self.progress.configure(state="disabled")
         try:
-            self.warnings = calibration_warnings()
+            self.warnings = calibration_warnings(TIME_MODES[self.settings["time_mode"]][0])
         except (OSError, KeyError, TypeError, ValueError) as error:
             self.status.set(f"校准文件失效，本轮未启动：{error}")
             return False
@@ -375,7 +427,7 @@ class BookingWindow:
             return False
         else:
             ctypes.windll.user32.AllowSetForegroundWindow(self.child.pid)
-            self.root.iconify()  # 子进程取得前台切换权限后再隐藏窗口。
+            self.root.withdraw()  # 子进程取得前台切换权限后再隐藏窗口。
             self.log_offset = 0
             self.log_pending = True
             self.status.set(
@@ -385,6 +437,18 @@ class BookingWindow:
             return True
 
     def tick(self):
+        while True:
+            try:
+                action = self.tray_actions.get_nowait()
+            except Empty:
+                break
+            if action == "show":
+                self.show_window()
+            elif action == "quit" and self.quit():
+                return
+        if not self.tray_thread.is_alive() and self.root.state() == "withdrawn":
+            self.show_window()
+            self.status.set("托盘图标异常退出，窗口已恢复")
         self.read_progress()
         if self.child is not None and self.child.poll() is not None:
             code = self.child.returncode
@@ -393,9 +457,10 @@ class BookingWindow:
             if self.armed and self.target is None:
                 self.set_active(False)
                 self.root.deiconify()
-                self.status.set(f"测试已结束（退出码 {code}）")
+                self.status.set(getattr(self, "result", None) or f"测试已结束（退出码 {code}）")
             elif self.armed:
-                self.status.set(f"本轮已结束（退出码 {code}）；下次计划 {self.target:%m月%d日 %H:%M:%S}")
+                outcome = getattr(self, "result", None) or f"本轮已结束（退出码 {code}）"
+                self.status.set(f"{outcome}；下次计划 {self.target:%m月%d日 %H:%M:%S}")
             self.show_warnings()
 
         if self.armed and self.target is not None and datetime.now() >= self.target:
@@ -411,11 +476,43 @@ class BookingWindow:
         self.root.after(200, self.tick)
 
     def close(self):
-        if not self.armed or self.stop():
-            self.root.destroy()
+        if self.tray_thread.is_alive() and self.tray_icon.visible:
+            self.root.withdraw()
+        elif messagebox.askyesno(
+            "托盘不可用", "托盘图标不可用，无法隐藏。是否退出程序？", parent=self.root
+        ):
+            self.quit()
+
+    def show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+
+    def quit(self):
+        self.show_window()
+        if self.armed and not self.stop():
+            return False
+        if self.tray_thread.is_alive():
+            self.tray_icon.stop()
+        self.root.destroy()
+        return True
+
+
+def decode_log(data):
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("gbk", errors="replace")
+
+
+def configure_child_output():
+    # windowed EXE 的标准输出可能沿用系统代码页；日志统一写 UTF-8。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 
 def run_booking():
+    configure_child_output()
     import pyautogui
     from main import main
 
@@ -433,7 +530,7 @@ def main():
     if not mutex:
         raise OSError(ctypes.get_last_error(), "无法创建程序实例锁")
     if ctypes.get_last_error() == 183:
-        ctypes.windll.user32.MessageBoxW(None, "程序已在运行，请查看任务栏。", "WechatBookingBot", 0)
+        ctypes.windll.user32.MessageBoxW(None, "程序已在运行，请查看系统托盘。", "WechatBookingBot", 0)
         kernel32.CloseHandle(mutex)
         return
     try:
@@ -446,11 +543,13 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--run-now"]:
         run_booking()
     elif sys.argv[1:] == ["--check-package"]:
+        configure_child_output()
         import main as booking_main  # noqa: F401
         from mouse_recorder import ACTION_FILE
 
         for file in (Path(__file__).with_name("booking_template.png"), ACTION_FILE):
             if not file.is_file():
                 raise FileNotFoundError(file)
+        print("中文日志编码检查通过")
     else:
         main()
