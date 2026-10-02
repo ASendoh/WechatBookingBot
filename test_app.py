@@ -153,6 +153,9 @@ def run_tests():
     window.start_time = Mock()
     window.root = Mock()
     window.status = Mock()
+    window.license_status = Mock()
+    window.license_badge = Mock()
+    window.set_license_badge = BookingWindow.set_license_badge.__get__(window, BookingWindow)
     window.tray_actions = SimpleQueue()
     window.tray_icon = Mock(visible=True)
     window.tray_thread = Mock()
@@ -235,6 +238,10 @@ def run_tests():
             log.write("本轮结果：目标时段已抢空，停止今天的预约\n")
         window.read_progress()
         assert window.result == "目标时段已抢空，停止今天的预约"
+        with app.LOG_FILE.open("a", encoding="utf-8") as log:
+            log.write("本轮结果：云端许可中断：设备已禁用\n")
+        window.read_progress()
+        window.license_status.set.assert_called_with("● 云端许可不可用")
 
         window.log_offset = 0
         window.progress.reset_mock()
@@ -256,6 +263,12 @@ def run_tests():
     window.license_results.put(app.LicenseError("设备已禁用"))
     window.tick()
     window.status.set.assert_called_with("云端许可不可用：设备已禁用")
+    window.license_status.set.assert_called_with("● 云端许可不可用")
+    window.status.set.reset_mock()
+    window.license_results.put(None)
+    window.tick()
+    window.license_status.set.assert_called_with("● 云端许可已通过")
+    window.status.set.assert_not_called()
     window.license_next_check = float("inf")
     window.tray_actions.put("show")
     window.root.deiconify.reset_mock()

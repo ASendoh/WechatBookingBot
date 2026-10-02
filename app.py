@@ -25,6 +25,7 @@ from calibration_ui import CalibrationWindow
 from license_client import CHECK_INTERVAL_SECONDS, LicenseError, check_license
 
 
+APP_NAME = "羽约助手"
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WechatBookingBot"
 SETTINGS_FILE = APP_DIR / "settings.json"
 LOG_FILE = APP_DIR / "scheduled_run.log"
@@ -106,7 +107,7 @@ def calibration_warnings(required_times=()):
 class BookingWindow:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("WechatBookingBot")
+        self.root.title(APP_NAME)
         self.root.configure(bg="#F6F8FC")
         self.root.minsize(720, 600)
         self.root.columnconfigure(0, weight=1)
@@ -129,6 +130,7 @@ class BookingWindow:
         self.time_mode = tk.StringVar(value=next(iter(TIME_MODES)))
         self.start_time = tk.StringVar(value="07:59:40")
         self.status = tk.StringVar(value="未启动")
+        self.license_status = tk.StringVar(value="● 许可检查中")
 
         style = ttk.Style(self.root)
         style.configure("Booking.TButton", font=("Microsoft YaHei UI", 10), padding=(10, 7))
@@ -136,8 +138,13 @@ class BookingWindow:
         frame = tk.Frame(self.root, bg="#F6F8FC", padx=20, pady=16)
         frame.grid(sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        tk.Label(frame, text="WechatBookingBot", bg="#F6F8FC", fg="#18253B",
+        tk.Label(frame, text=APP_NAME, bg="#F6F8FC", fg="#18253B",
                  font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        self.license_badge = tk.Label(
+            frame, textvariable=self.license_status, bg="#FFF3D9", fg="#8A6217",
+            padx=10, pady=5, font=("Microsoft YaHei UI", 9, "bold"),
+        )
+        self.license_badge.grid(row=0, column=0, sticky="e")
         tk.Label(frame, text="每天定时预约，也可立即测试完整流程", bg="#F6F8FC", fg="#66758A",
                  font=("Microsoft YaHei UI", 9)).grid(row=1, column=0, sticky="w", pady=(0, 12))
 
@@ -211,7 +218,7 @@ class BookingWindow:
         frame.rowconfigure(7, weight=1)
         self.progress.tag_configure("timestamp", foreground="#777777")
         tk.Label(frame,
-                 text="关闭窗口会隐藏到托盘；运行时窗口自动隐藏。联网许可每 10 分钟上报设备 ID、电脑名、来源 IP 和运行状态；断网或禁用即停止。",
+                 text="关闭窗口会隐藏到托盘；运行时窗口自动隐藏。",
                  bg="#F6F8FC", fg="#748197", wraplength=680,
                  font=("Microsoft YaHei UI", 9)).grid(
                      row=8, column=0, sticky="w", pady=(8, 0)
@@ -223,7 +230,7 @@ class BookingWindow:
         draw.ellipse((12, 12, 52, 52), fill="white")
         draw.ellipse((21, 21, 43, 43), fill="#790079")
         self.tray_icon = pystray.Icon(
-            "WechatBookingBot", icon_image, "WechatBookingBot",
+            "WechatBookingBot", icon_image, APP_NAME,
             menu=pystray.Menu(
                 pystray.MenuItem("打开界面", lambda *_: self.tray_actions.put("show"), default=True),
                 pystray.MenuItem("退出程序", lambda *_: self.tray_actions.put("quit")),
@@ -283,6 +290,7 @@ class BookingWindow:
             )
             self.warnings = calibration_warnings(TIME_MODES[settings["time_mode"]][0])
             check_license("idle")
+            self.set_license_badge(True)
             APP_DIR.mkdir(parents=True, exist_ok=True)
             temporary = SETTINGS_FILE.with_suffix(".json.tmp")
             temporary.write_text(
@@ -298,6 +306,7 @@ class BookingWindow:
             messagebox.showerror("无法保存设置", str(error), parent=self.root)
             return
         except LicenseError as error:
+            self.set_license_badge(False)
             messagebox.showerror("云端许可", str(error), parent=self.root)
             return
 
@@ -332,6 +341,13 @@ class BookingWindow:
         self.start_button.configure(state="disabled" if active else "normal")
         self.test_button.configure(state="disabled" if active else "normal")
         self.stop_button.configure(state="normal" if active else "disabled")
+
+    def set_license_badge(self, allowed):
+        self.license_status.set("● 云端许可已通过" if allowed else "● 云端许可不可用")
+        self.license_badge.configure(
+            bg="#E4F4EA" if allowed else "#FCE9E9",
+            fg="#216A40" if allowed else "#A73939",
+        )
 
     def stop(self):
         if self.child is not None and self.child.poll() is None:
@@ -395,6 +411,8 @@ class BookingWindow:
             for line in lines:
                 if line.startswith("本轮结果："):
                     self.result = line.strip().removeprefix("本轮结果：")
+                    if self.result.startswith("云端许可"):
+                        self.set_license_badge(False)
                 self.progress.insert(
                     "end", f"[{datetime.now():%Y-%m-%d %H:%M:%S}]  ", "timestamp"
                 )
@@ -418,10 +436,12 @@ class BookingWindow:
         try:
             check_license("booking")
         except LicenseError as error:
+            self.set_license_badge(False)
             self.target = None
             self.set_active(False)
             self.status.set(str(error))
             return False
+        self.set_license_badge(True)
         times, fallback = TIME_MODES[self.settings["time_mode"]]
         env = os.environ.copy()
         env.update({
@@ -478,14 +498,13 @@ class BookingWindow:
             else:
                 self.license_checking = False
                 self.license_next_check = time.monotonic() + CHECK_INTERVAL_SECONDS
+                self.set_license_badge(not license_error)
                 if license_error:
                     if self.child is not None and self.child.poll() is None:
                         self.terminate_child()
                     self.target = None
                     self.set_active(False)
                     self.status.set(f"云端许可不可用：{license_error}")
-                elif not self.armed:
-                    self.status.set("云端许可已通过；未启动")
             if (self.child is None and not self.license_checking and
                     time.monotonic() >= self.license_next_check):
                 self.license_checking = True
@@ -584,7 +603,7 @@ def main():
     if not mutex:
         raise OSError(ctypes.get_last_error(), "无法创建程序实例锁")
     if ctypes.get_last_error() == 183:
-        ctypes.windll.user32.MessageBoxW(None, "程序已在运行，请查看系统托盘。", "WechatBookingBot", 0)
+        ctypes.windll.user32.MessageBoxW(None, "程序已在运行，请查看系统托盘。", APP_NAME, 0)
         kernel32.CloseHandle(mutex)
         return
     try:

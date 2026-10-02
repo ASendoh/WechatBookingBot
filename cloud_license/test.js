@@ -28,10 +28,9 @@ async function run() {
     id, secret: key, computer: "test-pc", state: "booking",
   }) });
   const answer = async (request) => JSON.parse((await main(request)).body);
-  assert.equal((await answer(event(secret))).allowed, false);
-  assert.equal(records.get(id).enabled, false);
+  assert.equal((await answer(event(secret))).allowed, true);
+  assert.equal(records.get(id).enabled, true);
   assert.equal(records.get(id).ip, "203.0.113.1");
-  records.get(id).enabled = true;
   assert.equal((await answer(event(secret))).allowed, true);
   assert.equal((await answer(event("cd".repeat(32)))).allowed, false);
   records.get(id).enabled = false;

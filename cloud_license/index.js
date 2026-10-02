@@ -41,10 +41,10 @@ exports.main = async (event) => {
     const existing = (await doc.get()).data[0];
     if (!existing) {
       await doc.set({
-        secret_hash: secretHash, enabled: false, computer,
+        secret_hash: secretHash, enabled: true, computer,
         ip, state, first_seen: now, last_seen: now,
       });
-      return reply(200, false, "新设备待管理员批准");
+      return reply(200, true, "新设备已授权");
     }
     const stored = Buffer.from(existing.secret_hash || "", "hex");
     const received = Buffer.from(secretHash, "hex");
@@ -53,7 +53,7 @@ exports.main = async (event) => {
     }
     await doc.update({ computer, ip, state, last_seen: now });
     return reply(200, existing.enabled === true,
-      existing.enabled === true ? "已授权" : "设备未获批准或已被禁用");
+      existing.enabled === true ? "已授权" : "设备已被管理员禁用");
   } catch (error) {
     console.error("license check failed", error);
     return reply(503, false, "许可服务暂不可用");
