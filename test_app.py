@@ -200,6 +200,7 @@ def run_tests():
     with (TemporaryDirectory() as directory,
           patch.object(app, "LOG_FILE", Path(directory) / "test.log"),
           patch.object(app, "calibration_warnings", return_value=[]),
+          patch.object(app, "check_license", return_value=True),
           patch.object(app.subprocess, "Popen") as spawn,
           patch.object(app.ctypes.windll.user32, "AllowSetForegroundWindow", return_value=1) as allow):
         window.child = None
@@ -249,6 +250,13 @@ def run_tests():
 
     window.armed = False
     window.child = None
+    window.license_results = SimpleQueue()
+    window.license_checking = True
+    window.license_next_check = float("inf")
+    window.license_results.put(app.LicenseError("设备已禁用"))
+    window.tick()
+    window.status.set.assert_called_with("云端许可不可用：设备已禁用")
+    window.license_next_check = float("inf")
     window.tray_actions.put("show")
     window.root.deiconify.reset_mock()
     window.tick()

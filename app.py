@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -21,6 +22,7 @@ from PIL import Image, ImageDraw
 
 from calibration import PROFILE_PATH, estimate_slider_start, load_profile
 from calibration_ui import CalibrationWindow
+from license_client import CHECK_INTERVAL_SECONDS, LicenseError, check_license
 
 
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WechatBookingBot"
@@ -119,6 +121,9 @@ class BookingWindow:
         self.log_offset = None
         self.result = None
         self.tray_actions = SimpleQueue()
+        self.license_results = SimpleQueue()
+        self.license_checking = False
+        self.license_next_check = 0.0
 
         self.court = tk.StringVar(value="17")
         self.time_mode = tk.StringVar(value=next(iter(TIME_MODES)))
@@ -205,8 +210,10 @@ class BookingWindow:
         self.progress.grid(row=7, column=0, sticky="nsew")
         frame.rowconfigure(7, weight=1)
         self.progress.tag_configure("timestamp", foreground="#777777")
-        tk.Label(frame, text="关闭窗口会隐藏到托盘；从托盘打开界面或退出程序。运行时窗口会自动隐藏。",
-                 bg="#F6F8FC", fg="#748197", font=("Microsoft YaHei UI", 9)).grid(
+        tk.Label(frame,
+                 text="关闭窗口会隐藏到托盘；运行时窗口自动隐藏。联网许可每 10 分钟上报设备 ID、电脑名、来源 IP 和运行状态；断网或禁用即停止。",
+                 bg="#F6F8FC", fg="#748197", wraplength=680,
+                 font=("Microsoft YaHei UI", 9)).grid(
                      row=8, column=0, sticky="w", pady=(8, 0)
         )
 
@@ -275,6 +282,7 @@ class BookingWindow:
                 self.court.get(), self.time_mode.get(), self.start_time.get()
             )
             self.warnings = calibration_warnings(TIME_MODES[settings["time_mode"]][0])
+            check_license("idle")
             APP_DIR.mkdir(parents=True, exist_ok=True)
             temporary = SETTINGS_FILE.with_suffix(".json.tmp")
             temporary.write_text(
@@ -288,6 +296,9 @@ class BookingWindow:
             return
         except OSError as error:
             messagebox.showerror("无法保存设置", str(error), parent=self.root)
+            return
+        except LicenseError as error:
+            messagebox.showerror("云端许可", str(error), parent=self.root)
             return
 
         self.settings = settings
@@ -329,13 +340,7 @@ class BookingWindow:
                 parent=self.root,
             ):
                 return False
-            subprocess.run(
-                ["taskkill", "/PID", str(self.child.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW, check=False,
-            )
-            if self.child.poll() is None:
-                self.child.terminate()
+            self.terminate_child()
         self.child = None
         self.target = None
         self.read_progress()
@@ -344,6 +349,15 @@ class BookingWindow:
         self.status.set("已停止")
         self.show_warnings()
         return True
+
+    def terminate_child(self):
+        subprocess.run(
+            ["taskkill", "/PID", str(self.child.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW, check=False,
+        )
+        if self.child.poll() is None:
+            self.child.terminate()
 
     def show_warnings(self):
         if self.log_pending:
@@ -401,6 +415,13 @@ class BookingWindow:
         except (OSError, KeyError, TypeError, ValueError) as error:
             self.status.set(f"校准文件失效，本轮未启动：{error}")
             return False
+        try:
+            check_license("booking")
+        except LicenseError as error:
+            self.target = None
+            self.set_active(False)
+            self.status.set(str(error))
+            return False
         times, fallback = TIME_MODES[self.settings["time_mode"]]
         env = os.environ.copy()
         env.update({
@@ -449,6 +470,26 @@ class BookingWindow:
         if not self.tray_thread.is_alive() and self.root.state() == "withdrawn":
             self.show_window()
             self.status.set("托盘图标异常退出，窗口已恢复")
+        if hasattr(self, "license_results"):
+            try:
+                license_error = self.license_results.get_nowait()
+            except Empty:
+                pass
+            else:
+                self.license_checking = False
+                self.license_next_check = time.monotonic() + CHECK_INTERVAL_SECONDS
+                if license_error:
+                    if self.child is not None and self.child.poll() is None:
+                        self.terminate_child()
+                    self.target = None
+                    self.set_active(False)
+                    self.status.set(f"云端许可不可用：{license_error}")
+                elif not self.armed:
+                    self.status.set("云端许可已通过；未启动")
+            if (self.child is None and not self.license_checking and
+                    time.monotonic() >= self.license_next_check):
+                self.license_checking = True
+                threading.Thread(target=self.check_idle_license, daemon=True).start()
         self.read_progress()
         if self.child is not None and self.child.poll() is not None:
             code = self.child.returncode
@@ -460,7 +501,12 @@ class BookingWindow:
                 self.status.set(getattr(self, "result", None) or f"测试已结束（退出码 {code}）")
             elif self.armed:
                 outcome = getattr(self, "result", None) or f"本轮已结束（退出码 {code}）"
-                self.status.set(f"{outcome}；下次计划 {self.target:%m月%d日 %H:%M:%S}")
+                if outcome.startswith("云端"):
+                    self.target = None
+                    self.set_active(False)
+                    self.status.set(outcome)
+                else:
+                    self.status.set(f"{outcome}；下次计划 {self.target:%m月%d日 %H:%M:%S}")
             self.show_warnings()
 
         if self.armed and self.target is not None and datetime.now() >= self.target:
@@ -474,6 +520,14 @@ class BookingWindow:
             else:
                 self.status.set(f"已错过本轮启动窗口；下次计划 {self.target:%m月%d日 %H:%M:%S}")
         self.root.after(200, self.tick)
+
+    def check_idle_license(self):
+        try:
+            check_license("idle")
+            error = None
+        except Exception as exc:
+            error = exc
+        self.license_results.put(error)
 
     def close(self):
         if self.tray_thread.is_alive() and self.tray_icon.visible:

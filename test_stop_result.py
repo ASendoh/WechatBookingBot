@@ -121,7 +121,7 @@ def run_tests():
           patch.object(main, "select_tomorrow", return_value=tomorrow.SOLD_OUT),
           patch.object(main, "select_court") as select,
           patch.object(main, "recover_page") as recover):
-        main.main()
+        main.run_booking()
         select.assert_not_called()
         recover.assert_not_called()
 
@@ -136,7 +136,7 @@ def run_tests():
           patch.object(main, "wait_verify", return_value=True),
           patch.object(main, "wait_payment", return_value=True),
           patch.object(main, "recover_page") as recover):
-        main.main()
+        main.run_booking()
         recover.assert_not_called()
 
     with (patch.object(main, "CALIBRATION_PATH", None),
@@ -149,7 +149,7 @@ def run_tests():
           patch.object(main, "submit_booking", return_value=True),
           patch.object(main, "wait_verify", return_value=None),
           patch.object(main, "recover_page", return_value=False) as recover):
-        main.main()
+        main.run_booking()
         recover.assert_called_once_with()
 
     print("停止结局判断自检通过")

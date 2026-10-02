@@ -11,6 +11,7 @@ from check_verify import wait_verify
 from config import (CALIBRATION_PATH, ENTRY_UNKNOWN_GRACE_SECONDS,
                     PAYMENT_APPEAR_TIMEOUT_SECONDS, POLL_INTERVAL)
 from enter_booking import enter_booking
+from license_client import LicenseError, booking_guard
 from move_mouse import move_mouse
 from refresh_booking import refresh_booking
 from resize_wechat import resize_wechat, restore_entry_window
@@ -76,7 +77,7 @@ def recover_page():
     return False
 
 
-def main():
+def run_booking():
     print("程序开始，任意等待阶段均可按 Esc 停止")
     if not restore_entry_window() or not enter_booking() or not resize_wechat():
         return
@@ -130,6 +131,14 @@ def main():
             break
 
     print("程序已安全停止")
+
+
+def main():
+    try:
+        with booking_guard():
+            run_booking()
+    except LicenseError as error:
+        print(f"本轮结果：云端许可：{error}", flush=True)
 
 
 if __name__ == "__main__":
