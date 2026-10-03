@@ -155,6 +155,18 @@ def run_tests():
     window.status = Mock()
     window.license_status = Mock()
     window.license_badge = Mock()
+    window.court_entry = Mock()
+    window.time_box = Mock()
+    window.time_entry = Mock()
+    window.start_button = Mock()
+    window.test_button = Mock()
+    window.stop_button = Mock()
+    window.update_button = Mock()
+    window.calibrate_button = Mock()
+    window.morning_button = Mock()
+    window.update_required = None
+    window.update_downloading = False
+    window.update_results = SimpleQueue()
     window.set_license_badge = BookingWindow.set_license_badge.__get__(window, BookingWindow)
     window.tray_actions = SimpleQueue()
     window.tray_icon = Mock(visible=True)
@@ -178,6 +190,28 @@ def run_tests():
     window.start_time.get.assert_not_called()
     window.launch.assert_called_once_with()
     window.set_active.assert_called_once_with(True)
+    import app
+    required = app.UpdateRequired("1.2.0", "https://example.invalid/new.exe", "a" * 64)
+    window.child = None
+    window.show_window = Mock()
+    window.show_update_required(required)
+    assert window.update_required is required
+    window.update_button.pack.assert_called_once()
+    window.status.set.assert_called_with(str(required))
+    window.set_license_badge(True)
+    assert window.update_required is None
+    window.update_button.pack_forget.assert_called_once_with()
+    window.show_window = BookingWindow.show_window.__get__(window, BookingWindow)
+    window.set_active = BookingWindow.set_active.__get__(window, BookingWindow)
+    window.license_allowed = False
+    window.update_required = required
+    window.set_active(False)
+    for control in (window.start_button, window.test_button,
+                    window.calibrate_button, window.morning_button):
+        control.configure.assert_any_call(state="disabled")
+    window.update_required = None
+    window.license_allowed = True
+    window.set_active = Mock()
 
     window.armed = True
     window.child = Mock(returncode=0)

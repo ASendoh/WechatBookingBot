@@ -1,6 +1,7 @@
 """云端许可客户端离线自检：python test_license_client.py。"""
 
 from io import BytesIO
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -24,6 +25,31 @@ def run_tests():
             with patch.object(client, "urlopen", return_value=response(True)) as send:
                 assert client.check_license("booking")
                 assert json.loads(send.call_args.args[0].data)["id"] == first["id"]
+                assert json.loads(send.call_args.args[0].data)["version"] == client.APP_VERSION
+            executable = b"example executable"
+            update = {
+                "version": "1.2.0", "url": "https://example.invalid/new.exe",
+                "sha256": hashlib.sha256(executable).hexdigest(),
+            }
+            payload = BytesIO(json.dumps({"allowed": False, "update": update}).encode())
+            with patch.object(client, "urlopen", return_value=payload):
+                try:
+                    client.check_license("idle")
+                except client.UpdateRequired as error:
+                    assert error.version == "1.2.0"
+                    with patch.object(client, "urlopen", return_value=BytesIO(executable)):
+                        downloaded = client.download_update(error)
+                    assert downloaded.read_bytes() == executable
+                else:
+                    raise AssertionError("旧版本不应继续使用")
+            invalid = client.UpdateRequired("1.2.0", update["url"], "0" * 64)
+            with patch.object(client, "urlopen", return_value=BytesIO(executable)):
+                try:
+                    client.download_update(invalid)
+                except client.LicenseError:
+                    assert not list((Path(folder) / "updates").glob("*.part"))
+                else:
+                    raise AssertionError("校验失败的更新文件不应保留")
             with patch.object(client, "urlopen", return_value=response(False)):
                 try:
                     client.check_license("booking")

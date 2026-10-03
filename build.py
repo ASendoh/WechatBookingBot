@@ -1,15 +1,18 @@
 """运行此文件，将当前项目打包为可分享的单文件 Windows EXE。"""
 
 from datetime import datetime
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import sys
 
+from license_client import APP_VERSION
+
 
 PROJECT = Path(__file__).resolve().parent
-APP_NAME = "羽约助手"
+APP_NAME = f"羽约助手V{APP_VERSION}"
 ASSETS = ("booking_template.png", "mouse_actions.json")
 
 
@@ -39,6 +42,8 @@ def main():
     exe = output / f"{APP_NAME}.exe"
     subprocess.run([str(exe), "--check-package"], check=True, timeout=60)
     print(f"打包并自检完成：{exe}")
+    with exe.open("rb") as file:
+        print(f"SHA-256：{hashlib.file_digest(file, 'sha256').hexdigest()}")
 
 
 if __name__ == "__main__":

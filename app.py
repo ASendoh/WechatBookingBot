@@ -22,7 +22,8 @@ from PIL import Image, ImageDraw
 
 from calibration import PROFILE_PATH, estimate_slider_start, load_profile
 from calibration_ui import CalibrationWindow
-from license_client import CHECK_INTERVAL_SECONDS, LicenseError, check_license
+from license_client import (APP_VERSION, CHECK_INTERVAL_SECONDS, LicenseError,
+                            UpdateRequired, check_license, download_update)
 
 
 APP_NAME = "羽约助手"
@@ -123,6 +124,10 @@ class BookingWindow:
         self.result = None
         self.tray_actions = SimpleQueue()
         self.license_results = SimpleQueue()
+        self.update_results = SimpleQueue()
+        self.update_required = None
+        self.update_downloading = False
+        self.license_allowed = False
         self.license_checking = False
         self.license_next_check = 0.0
 
@@ -138,13 +143,19 @@ class BookingWindow:
         frame = tk.Frame(self.root, bg="#F6F8FC", padx=20, pady=16)
         frame.grid(sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        tk.Label(frame, text=APP_NAME, bg="#F6F8FC", fg="#18253B",
+        tk.Label(frame, text=f"{APP_NAME}  v{APP_VERSION}", bg="#F6F8FC", fg="#18253B",
                  font=("Microsoft YaHei UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        license_area = tk.Frame(frame, bg="#F6F8FC")
+        license_area.grid(row=0, column=0, sticky="e")
         self.license_badge = tk.Label(
-            frame, textvariable=self.license_status, bg="#FFF3D9", fg="#8A6217",
+            license_area, textvariable=self.license_status, bg="#FFF3D9", fg="#8A6217",
             padx=10, pady=5, font=("Microsoft YaHei UI", 9, "bold"),
         )
-        self.license_badge.grid(row=0, column=0, sticky="e")
+        self.license_badge.pack(side="left")
+        self.update_button = ttk.Button(
+            license_area, text="下载新版", command=self.request_update_download,
+            style="Booking.TButton",
+        )
         tk.Label(frame, text="每天定时预约，也可立即测试完整流程", bg="#F6F8FC", fg="#66758A",
                  font=("Microsoft YaHei UI", 9)).grid(row=1, column=0, sticky="w", pady=(0, 12))
 
@@ -198,10 +209,16 @@ class BookingWindow:
             buttons, text="停止", command=self.stop, state="disabled", style="Booking.TButton"
         )
         self.stop_button.pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="首次校准 / 重新校准", command=self.calibrate,
-                   style="Booking.TButton").pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="补充上午坐标", command=self.calibrate_morning,
-                   style="Booking.TButton").pack(side="left", padx=(8, 0))
+        self.calibrate_button = ttk.Button(
+            buttons, text="首次校准 / 重新校准", command=self.calibrate,
+            style="Booking.TButton",
+        )
+        self.calibrate_button.pack(side="left", padx=(8, 0))
+        self.morning_button = ttk.Button(
+            buttons, text="补充上午坐标", command=self.calibrate_morning,
+            style="Booking.TButton",
+        )
+        self.morning_button.pack(side="left", padx=(8, 0))
         tk.Label(frame, textvariable=self.status, bg="#E8EEF8", fg="#254878",
                  anchor="w", padx=11, pady=8, wraplength=650,
                  font=("Microsoft YaHei UI", 10)).grid(
@@ -225,6 +242,7 @@ class BookingWindow:
         )
 
         self.load_settings()
+        self.set_active(False)  # 首次联网检查通过前不开放操作。
         icon_image = Image.new("RGB", (64, 64), "#790079")
         draw = ImageDraw.Draw(icon_image)
         draw.ellipse((12, 12, 52, 52), fill="white")
@@ -305,6 +323,9 @@ class BookingWindow:
         except OSError as error:
             messagebox.showerror("无法保存设置", str(error), parent=self.root)
             return
+        except UpdateRequired as error:
+            self.show_update_required(error)
+            return
         except LicenseError as error:
             self.set_license_badge(False)
             messagebox.showerror("云端许可", str(error), parent=self.root)
@@ -335,19 +356,62 @@ class BookingWindow:
 
     def set_active(self, active):
         self.armed = active
-        self.court_entry.configure(state="disabled" if active else "normal")
-        self.time_box.configure(state="disabled" if active else "readonly")
-        self.time_entry.configure(state="disabled" if active else "normal")
-        self.start_button.configure(state="disabled" if active else "normal")
-        self.test_button.configure(state="disabled" if active else "normal")
+        locked = active or self.update_required is not None or not self.license_allowed
+        self.court_entry.configure(state="disabled" if locked else "normal")
+        self.time_box.configure(state="disabled" if locked else "readonly")
+        self.time_entry.configure(state="disabled" if locked else "normal")
+        self.start_button.configure(state="disabled" if locked else "normal")
+        self.test_button.configure(state="disabled" if locked else "normal")
         self.stop_button.configure(state="normal" if active else "disabled")
+        self.calibrate_button.configure(state="disabled" if locked else "normal")
+        self.morning_button.configure(state="disabled" if locked else "normal")
 
     def set_license_badge(self, allowed):
+        self.license_allowed = allowed
+        if allowed and self.update_required is not None:
+            self.update_required = None
+            self.update_button.pack_forget()
+        self.set_active(self.armed)
         self.license_status.set("● 云端许可已通过" if allowed else "● 云端许可不可用")
         self.license_badge.configure(
             bg="#E4F4EA" if allowed else "#FCE9E9",
             fg="#216A40" if allowed else "#A73939",
         )
+
+    def show_update_required(self, update):
+        self.update_required = update
+        self.license_allowed = False
+        if self.child is not None and self.child.poll() is None:
+            self.terminate_child()
+        self.target = None
+        self.set_active(False)
+        self.license_status.set(f"● 必须更新至 v{update.version}")
+        self.license_badge.configure(bg="#FFF1D6", fg="#915C00")
+        self.update_button.configure(state="disabled" if self.update_downloading else "normal")
+        self.update_button.pack(side="left", padx=(8, 0))
+        self.status.set(str(update))
+        self.show_window()
+
+    def request_update_download(self):
+        if self.update_required is None or self.update_downloading:
+            return
+        self.update_downloading = True
+        self.update_button.configure(state="disabled")
+        self.status.set("正在下载新版并校验文件，请稍候…")
+        threading.Thread(target=self.download_update_worker, daemon=True).start()
+
+    def download_update_worker(self):
+        try:
+            check_license("idle")  # 重新取得有效下载链接。
+        except UpdateRequired as update:
+            try:
+                self.update_results.put((download_update(update), None))
+            except Exception as error:
+                self.update_results.put((None, error))
+        except Exception as error:
+            self.update_results.put((None, error))
+        else:
+            self.update_results.put((None, None))
 
     def stop(self):
         if self.child is not None and self.child.poll() is None:
@@ -419,7 +483,7 @@ class BookingWindow:
                 self.progress.insert("end", line)
             self.progress.see("end")
             self.progress.configure(state="disabled")
-            if self.child is not None:
+            if self.child is not None and self.update_required is None:
                 self.status.set(f"正在执行：{lines[-1].strip()}")
 
     def launch(self):
@@ -435,6 +499,9 @@ class BookingWindow:
             return False
         try:
             check_license("booking")
+        except UpdateRequired as error:
+            self.show_update_required(error)
+            return False
         except LicenseError as error:
             self.set_license_badge(False)
             self.target = None
@@ -490,6 +557,25 @@ class BookingWindow:
         if not self.tray_thread.is_alive() and self.root.state() == "withdrawn":
             self.show_window()
             self.status.set("托盘图标异常退出，窗口已恢复")
+        try:
+            path, download_error = self.update_results.get_nowait()
+        except Empty:
+            pass
+        else:
+            self.update_downloading = False
+            self.update_button.configure(state="normal")
+            if download_error:
+                self.status.set(f"新版下载失败：{download_error}")
+            elif path is None:
+                self.set_license_badge(True)
+                self.status.set("云端已取消更新要求，可以继续使用")
+            else:
+                self.status.set(f"新版已下载并校验：{path}；请关闭旧版并运行新版")
+                self.show_window()
+                try:
+                    os.startfile(path.parent)
+                except OSError:
+                    pass  # 路径已显示在界面中，资源管理器打不开也不影响更新文件。
         if hasattr(self, "license_results"):
             try:
                 license_error = self.license_results.get_nowait()
@@ -498,8 +584,11 @@ class BookingWindow:
             else:
                 self.license_checking = False
                 self.license_next_check = time.monotonic() + CHECK_INTERVAL_SECONDS
-                self.set_license_badge(not license_error)
-                if license_error:
+                if isinstance(license_error, UpdateRequired):
+                    self.show_update_required(license_error)
+                else:
+                    self.set_license_badge(not license_error)
+                if license_error and not isinstance(license_error, UpdateRequired):
                     if self.child is not None and self.child.poll() is None:
                         self.terminate_child()
                     self.target = None
