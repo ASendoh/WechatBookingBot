@@ -307,7 +307,7 @@ class BookingWindow:
                 self.court.get(), self.time_mode.get(), self.start_time.get()
             )
             self.warnings = calibration_warnings(TIME_MODES[settings["time_mode"]][0])
-            check_license("idle")
+            check_license("idle", settings)
             self.set_license_badge(True)
             APP_DIR.mkdir(parents=True, exist_ok=True)
             temporary = SETTINGS_FILE.with_suffix(".json.tmp")
@@ -414,6 +414,7 @@ class BookingWindow:
             self.update_results.put((None, None))
 
     def stop(self):
+        was_scheduled = self.armed and self.target is not None
         if self.child is not None and self.child.poll() is None:
             if not messagebox.askyesno(
                 "确认停止", "预约流程正在运行，立即停止可能中断当前操作。确定停止吗？",
@@ -427,6 +428,11 @@ class BookingWindow:
         self.log_offset = None
         self.set_active(False)
         self.status.set("已停止")
+        if was_scheduled:
+            try:
+                check_license("idle")
+            except LicenseError:
+                pass  # 断网时由下次空闲许可检查清除云端计划。
         self.show_warnings()
         return True
 
@@ -631,7 +637,8 @@ class BookingWindow:
 
     def check_idle_license(self):
         try:
-            check_license("idle")
+            plan = self.settings if self.armed and self.target is not None else None
+            check_license("idle", plan)
             error = None
         except Exception as exc:
             error = exc

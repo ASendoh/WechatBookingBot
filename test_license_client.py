@@ -22,13 +22,16 @@ def run_tests():
             def response(allowed):
                 return BytesIO(json.dumps({"allowed": allowed, "reason": "待批准"}).encode())
 
-            with patch.object(client, "urlopen", return_value=response(True)) as send:
+            with patch.object(client, "urlopen", side_effect=lambda *_a, **_k: response(True)) as send:
                 assert client.check_license("booking")
                 assert json.loads(send.call_args.args[0].data)["id"] == first["id"]
                 assert json.loads(send.call_args.args[0].data)["version"] == client.APP_VERSION
+                plan = {"court": 17, "time_mode": "10:30-12:30"}
+                assert client.check_license("idle", plan)
+                assert json.loads(send.call_args.args[0].data)["plan"] == plan
             executable = b"example executable"
             update = {
-                "version": "1.2.0", "url": "https://example.invalid/new.exe",
+                "version": "2.1", "url": "https://example.invalid/new.exe",
                 "sha256": hashlib.sha256(executable).hexdigest(),
             }
             payload = BytesIO(json.dumps({"allowed": False, "update": update}).encode())
@@ -36,13 +39,18 @@ def run_tests():
                 try:
                     client.check_license("idle")
                 except client.UpdateRequired as error:
-                    assert error.version == "1.2.0"
+                    assert error.version == "2.1"
                     with patch.object(client, "urlopen", return_value=BytesIO(executable)):
                         downloaded = client.download_update(error)
                     assert downloaded.read_bytes() == executable
                 else:
                     raise AssertionError("旧版本不应继续使用")
-            invalid = client.UpdateRequired("1.2.0", update["url"], "0" * 64)
+            same_version = dict(update, version="2.0.0")
+            with patch.object(client, "urlopen", return_value=BytesIO(json.dumps({
+                    "allowed": True, "update": same_version,
+            }).encode())):
+                assert client.check_license("idle")
+            invalid = client.UpdateRequired("2.1", update["url"], "0" * 64)
             with patch.object(client, "urlopen", return_value=BytesIO(executable)):
                 try:
                     client.download_update(invalid)

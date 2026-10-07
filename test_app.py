@@ -191,7 +191,7 @@ def run_tests():
     window.launch.assert_called_once_with()
     window.set_active.assert_called_once_with(True)
     import app
-    required = app.UpdateRequired("1.2.0", "https://example.invalid/new.exe", "a" * 64)
+    required = app.UpdateRequired("2.1", "https://example.invalid/new.exe", "a" * 64)
     window.child = None
     window.show_window = Mock()
     window.show_update_required(required)
@@ -212,6 +212,37 @@ def run_tests():
     window.update_required = None
     window.license_allowed = True
     window.set_active = Mock()
+    scheduled = BookingWindow.__new__(BookingWindow)
+    scheduled.court = Mock()
+    scheduled.court.get.return_value = "17"
+    scheduled.time_mode = Mock()
+    scheduled.time_mode.get.return_value = "10:30-12:30"
+    scheduled.start_time = Mock()
+    scheduled.start_time.get.return_value = "07:59:40"
+    scheduled.set_license_badge = Mock()
+    scheduled.set_active = Mock()
+    scheduled.status = Mock()
+    scheduled.root = Mock()
+    scheduled.child = None
+    scheduled.armed = False
+    scheduled.show_warnings = Mock()
+    scheduled.read_progress = Mock()
+    with (TemporaryDirectory() as directory,
+          patch.object(app, "APP_DIR", Path(directory)),
+          patch.object(app, "SETTINGS_FILE", Path(directory) / "settings.json"),
+          patch.object(app, "calibration_warnings", return_value=[]),
+          patch.object(app, "check_license", return_value=True) as license_check):
+        scheduled.start()
+        plan = {"court": 17, "time_mode": "10:30-12:30", "start_time": "07:59:40"}
+        license_check.assert_called_once_with("idle", plan)
+        scheduled.armed = True
+        scheduled.license_results = SimpleQueue()
+        scheduled.check_idle_license()
+        license_check.assert_called_with("idle", plan)
+        assert scheduled.license_results.get_nowait() is None
+        license_check.reset_mock()
+        assert scheduled.stop()
+        license_check.assert_called_once_with("idle")
 
     window.armed = True
     window.child = Mock(returncode=0)

@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const Module = require("node:module");
-process.env.BOOKING_RELEASE_VERSION = "1.1.0";
+process.env.BOOKING_RELEASE_VERSION = "2.0";
 process.env.BOOKING_RELEASE_FILE_ID = "cloud://test/new.exe";
 process.env.BOOKING_RELEASE_SHA256 = "ab".repeat(32);
 const records = new Map();
@@ -32,20 +32,34 @@ Module._load = originalLoad;
 async function run() {
   const id = "12345678-1234-1234-1234-123456789abc";
   const secret = "ab".repeat(32);
-  const event = (key, version = "1.1.0") => ({ httpMethod: "POST", body: JSON.stringify({
+  const event = (key, version = "2.0") => ({ httpMethod: "POST", body: JSON.stringify({
     id, secret: key, computer: "test-pc", state: "booking", version,
   }) });
   const answer = async (request) => JSON.parse((await main(request)).body);
   assert.equal((await answer(event(secret))).allowed, true);
   assert.equal(records.get(id).enabled, true);
   assert.equal(records.get(id).ip, "203.0.113.1");
+  const scheduled = JSON.parse(event(secret).body);
+  scheduled.plan = { court: 17, time_mode: "10:30-12:30" };
+  assert.equal((await answer({ httpMethod: "POST", body: JSON.stringify(scheduled) })).allowed, true);
+  assert.equal(records.get(id).planned_court, 17);
+  assert.equal(records.get(id).planned_time_mode, "10:30-12:30");
+  assert.equal((await answer(event(secret, "2.0"))).allowed, true);
+  assert.equal(records.get(id).planned_court, 17);
+  const idle = JSON.parse(event(secret).body);
+  idle.state = "idle";
+  assert.equal((await answer({ httpMethod: "POST", body: JSON.stringify(idle) })).allowed, true);
+  assert.equal(records.get(id).planned_court, null);
+  assert.equal(records.get(id).planned_time_mode, null);
+  scheduled.plan.court = 18;
+  assert.equal((await answer({ httpMethod: "POST", body: JSON.stringify(scheduled) })).allowed, false);
   assert.equal((await answer(event(secret))).allowed, true);
-  const old = await answer(event(secret, "1.0.0"));
+  const old = await answer(event(secret, "1.1.1"));
   assert.equal(old.allowed, false);
-  assert.equal(old.update.version, "1.1.0");
+  assert.equal(old.update.version, "2.0.0");
   assert.equal(old.update.url, "https://example.invalid/new.exe");
   assert.equal(old.update.sha256, "ab".repeat(32));
-  assert.equal((await answer(event(secret, "1.2.0"))).allowed, true);
+  assert.equal((await answer(event(secret, "2.1"))).allowed, true);
   const legacy = JSON.parse(event(secret).body);
   delete legacy.version;
   assert.equal((await answer({ httpMethod: "POST", body: JSON.stringify(legacy) })).allowed, false);

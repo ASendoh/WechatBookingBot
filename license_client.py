@@ -17,7 +17,7 @@ import uuid
 
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WechatBookingBot"
 DEVICE_FILE = APP_DIR / "device.json"
-APP_VERSION = "1.1.1"
+APP_VERSION = "2.0"
 # 固定云端许可入口；不能由用户设置文件或环境变量覆盖。
 ENDPOINT = "https://booking-bot-d5gzn52le82e572c9-1499668155.ap-shanghai.app.tcloudbase.com/booking-license"
 CHECK_INTERVAL_SECONDS = 600  # 运行与空闲时均每 10 分钟检查一次。
@@ -91,15 +91,18 @@ def device_identity():
     return device
 
 
-def check_license(state):
+def check_license(state, plan=None):
     if not ENDPOINT.startswith("https://"):
         raise LicenseError("云端许可尚未配置，预约已停止")
     device = device_identity()
-    payload = json.dumps({
+    data = {
         "id": device["id"], "secret": device["secret"],
         "computer": socket.gethostname()[:100], "state": state,
         "version": APP_VERSION,
-    }).encode("utf-8")
+    }
+    if plan is not None:
+        data["plan"] = {"court": plan["court"], "time_mode": plan["time_mode"]}
+    payload = json.dumps(data).encode("utf-8")
     request = Request(ENDPOINT, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
@@ -111,12 +114,14 @@ def check_license(state):
     update = result.get("update")
     if update is not None:
         if (not isinstance(update, dict) or
-                not re.fullmatch(r"\d+\.\d+\.\d+", str(update.get("version", ""))) or
+                not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", str(update.get("version", ""))) or
                 not isinstance(update.get("url"), str) or
                 not update["url"].startswith("https://") or
                 not re.fullmatch(r"[0-9a-fA-F]{64}", str(update.get("sha256", "")))):
             raise LicenseError("云端更新信息无效，预约已停止")
-        if tuple(map(int, update["version"].split("."))) > tuple(map(int, APP_VERSION.split("."))):
+        latest = tuple((list(map(int, update["version"].split("."))) + [0])[:3])
+        current = tuple((list(map(int, APP_VERSION.split("."))) + [0])[:3])
+        if latest > current:
             raise UpdateRequired(update["version"], update["url"], update["sha256"])
     if not result["allowed"]:
         raise LicenseError(f"云端未授权：{result.get('reason', '请联系管理员')}")

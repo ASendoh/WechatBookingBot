@@ -21,11 +21,11 @@ function reply(statusCode, allowed, reason, update) {
 
 async function requiredUpdate(version) {
   if (!RELEASE.version && !RELEASE.fileID && !RELEASE.sha256) return null;
-  if (!/^\d+\.\d+\.\d+$/.test(RELEASE.version) ||
+  if (!/^\d+\.\d+(?:\.\d+)?$/.test(RELEASE.version) ||
       !/^cloud:\/\//.test(RELEASE.fileID) ||
       !/^[0-9a-f]{64}$/i.test(RELEASE.sha256)) throw new Error("更新配置无效");
-  const parts = (value) => /^\d+\.\d+\.\d+$/.test(value || "")
-    ? value.split(".").map(Number) : [0, 0, 0];
+  const parts = (value) => /^\d+\.\d+(?:\.\d+)?$/.test(value || "")
+    ? [...value.split(".").map(Number), 0].slice(0, 3) : [0, 0, 0];
   const current = parts(version);
   const latest = parts(RELEASE.version);
   if (!latest.some((part, index) => part > current[index] &&
@@ -37,7 +37,10 @@ async function requiredUpdate(version) {
   if (typeof url !== "string" || !url.startsWith("https://")) {
     throw new Error("无法生成新版下载地址");
   }
-  return { version: RELEASE.version, url, sha256: RELEASE.sha256 };
+  // 旧版客户端只接受三段版本号；过渡期仅对旧版补上末尾的 .0。
+  const versionForClient = /^\d+\.\d+\.\d+$/.test(version || "") &&
+    /^\d+\.\d+$/.test(RELEASE.version) ? `${RELEASE.version}.0` : RELEASE.version;
+  return { version: versionForClient, url, sha256: RELEASE.sha256 };
 }
 
 exports.main = async (event) => {
@@ -52,14 +55,23 @@ exports.main = async (event) => {
     return reply(400, false, "JSON 无效");
   }
   if (!input || typeof input !== "object") return reply(400, false, "设备信息无效");
-  const { id, secret, computer, state, version } = input;
+  const { id, secret, computer, state, version, plan } = input;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id || "") ||
       !/^[0-9a-f]{64}$/i.test(secret || "") ||
       typeof computer !== "string" || computer.length > 100 ||
       (version !== undefined && (typeof version !== "string" || version.length > 30)) ||
-      !["idle", "booking"].includes(state)) {
+      !["idle", "booking"].includes(state) ||
+      (plan !== undefined && (
+        !plan || typeof plan !== "object" ||
+        !Number.isInteger(plan.court) || plan.court < 1 || plan.court > 17 ||
+        !["19:00-21:00", "仅19:00-20:00", "仅20:00-21:00",
+          "10:30-12:30", "仅10:30-11:30", "仅11:30-12:30"].includes(plan.time_mode)
+      ))) {
     return reply(400, false, "设备信息无效");
   }
+  const planFields = plan
+    ? { planned_court: plan.court, planned_time_mode: plan.time_mode }
+    : state === "idle" ? { planned_court: null, planned_time_mode: null } : {};
 
   const secretHash = crypto.createHash("sha256").update(secret, "hex").digest("hex");
   const doc = devices.doc(id);
@@ -70,7 +82,7 @@ exports.main = async (event) => {
     if (!existing) {
       await doc.set({
         secret_hash: secretHash, enabled: true, computer,
-        ip, state, first_seen: now, last_seen: now,
+        ip, state, first_seen: now, last_seen: now, ...planFields,
       });
     } else {
       const stored = Buffer.from(existing.secret_hash || "", "hex");
@@ -78,7 +90,7 @@ exports.main = async (event) => {
       if (stored.length !== received.length || !crypto.timingSafeEqual(stored, received)) {
         return reply(403, false, "设备凭据不匹配");
       }
-      await doc.update({ computer, ip, state, last_seen: now });
+      await doc.update({ computer, ip, state, last_seen: now, ...planFields });
       if (existing.enabled !== true) return reply(200, false, "设备已被管理员禁用");
     }
     const update = await requiredUpdate(version);
