@@ -113,7 +113,13 @@ def run_tests():
     draw.rectangle((0, 1320, 1999, 1399), fill=(153, 0, 153))
     assert main.payment_page(payment, (0, 0, 2000, 1400))
 
-    with (patch.object(main, "CALIBRATION_PATH", None),
+    stop = {"requested": False}
+    def stop_after_recovery():
+        stop["requested"] = True
+        return False
+
+    with (patch.object(main.ai_assistant, "decide", return_value=None),
+          patch.object(main, "CALIBRATION_PATH", None),
           patch.object(main, "restore_entry_window", return_value=True),
           patch.object(main, "enter_booking", return_value=True),
           patch.object(main, "resize_wechat", return_value=True),
@@ -148,7 +154,10 @@ def run_tests():
           patch.object(main, "select_court", return_value=[("19:00-20:00", 1)]),
           patch.object(main, "submit_booking", return_value=True),
           patch.object(main, "wait_verify", return_value=None),
-          patch.object(main, "recover_page", return_value=False) as recover):
+          patch.object(main.ai_assistant, "decide", return_value=None),
+          patch.object(main, "payment_appeared_during_recovery", return_value=False),
+          patch.object(main.keyboard, "is_pressed", side_effect=lambda key: stop["requested"]),
+          patch.object(main, "recover_page", side_effect=stop_after_recovery) as recover):
         main.run_booking()
         recover.assert_called_once_with()
 

@@ -729,5 +729,15 @@ if __name__ == "__main__":
             if not file.is_file():
                 raise FileNotFoundError(file)
         print("中文日志编码检查通过")
+    elif len(sys.argv) == 3 and sys.argv[1] == "--check-ai-connection":
+        from ai_assist import check_connection
+
+        report = Path(sys.argv[2])
+        try:
+            result = check_connection()
+        except Exception as error:
+            report.write_text(f"AI 连接检查失败：{error}", encoding="utf-8")
+            raise SystemExit(1)
+        report.write_text(result, encoding="utf-8")
     else:
         main()

@@ -8,6 +8,7 @@ from config import ENTRY_UNKNOWN_GRACE_SECONDS, PAGE_LOAD_SECONDS, POLL_INTERVAL
 
 def enter_booking():
     unknown_since = None
+    failed_attempts = 0
     while True:
         if keyboard.is_pressed("esc"):
             print("检测到 Esc，停止进入预约页面")
@@ -41,3 +42,7 @@ def enter_booking():
             time.sleep(POLL_INTERVAL)
 
         print("进入失败，重新尝试")
+        failed_attempts += 1
+        if failed_attempts >= 5:
+            print("连续 5 次无法进入预约页，交由异常恢复处理", flush=True)
+            return False
