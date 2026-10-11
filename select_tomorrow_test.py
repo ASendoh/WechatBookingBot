@@ -17,6 +17,7 @@ from config import (
     TOMORROW_POS,
     TOMORROW_RETRIES,
     TOMORROW_SELECTED_POS,
+    TOMORROW_SELECTED_RECHECK_SECONDS,
     times,
 )
 
@@ -71,19 +72,32 @@ def select_tomorrow():
         time.sleep(TOMORROW_DOUBLE_CLICK_INTERVAL)
         click_wechat(*TOMORROW_POS)
 
-        # 单次检测等待时长由 config.py 的 TOMORROW_LOAD_SECONDS 控制。
-        deadline = time.monotonic() + TOMORROW_LOAD_SECONDS
+        deadline = None
         selected_message_shown = False
         morning_test_ready = None
         gray_since = None
-        while time.monotonic() < deadline:
+        while deadline is None or time.monotonic() < deadline:
             if keyboard.is_pressed("esc"):
                 print("检测到 Esc，停止选择第二天")
                 return False
             screenshot = pyautogui.screenshot()
             if not tomorrow_is_selected(screenshot):
-                time.sleep(POLL_INTERVAL)
-                continue
+                gray_since = None
+                morning_test_ready = None
+                recheck_deadline = time.monotonic() + TOMORROW_SELECTED_RECHECK_SECONDS
+                while time.monotonic() < recheck_deadline:
+                    if keyboard.is_pressed("esc"):
+                        print("检测到 Esc，停止选择第二天")
+                        return False
+                    time.sleep(max(0, min(POLL_INTERVAL, recheck_deadline - time.monotonic())))
+                screenshot = pyautogui.screenshot()
+                if not tomorrow_is_selected(screenshot):
+                    print("等待后仍未检测到第二天紫线，准备重新双击")
+                    break
+            if deadline is None:
+                deadline = time.monotonic() + TOMORROW_LOAD_SECONDS
+            if time.monotonic() >= deadline:
+                break
             evening = find_available_court(screenshot, times)
             if evening:
                 print(f"第二天页面加载成功，检测到 {evening[1]}号场 {evening[0]} 可预约")

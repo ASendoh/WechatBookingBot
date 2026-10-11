@@ -251,18 +251,22 @@ def test_replay_uses_calibrated_slider_start():
             pass
 
     controller = Controller()
-    events = [[0, "click", 700, 600, "left", True],
-              [0, "move", 800, 620],
-              [0, "click", 800, 620, "left", False]]
+    events = [[0.327, "click", 700, 600, "left", True],
+              [0.473, "move", 800, 620],
+              [0.863, "click", 800, 620, "left", False]]
     with TemporaryDirectory() as directory:
         action_file = Path(directory) / "actions.json"
         action_file.write_text(json.dumps(events), encoding="utf-8")
         with (patch.object(mouse_recorder, "ACTION_FILE", action_file),
               patch.object(mouse_recorder.mouse, "Controller", return_value=controller),
-              patch.object(mouse_recorder.time, "sleep"),
+              patch.object(mouse_recorder.time, "sleep") as sleep,
               patch.object(config, "SLIDER_START_POS", (400, 300)),
               patch.object(config, "WINDOW_SIZE", (1000, 700))):
             mouse_recorder.play()
+    delays = [call.args[0] for call in sleep.call_args_list]
+    assert delays[0] == 0
+    assert abs(delays[1] - 0.146) < 1e-9
+    assert abs(delays[2] - 0.390) < 1e-9
     assert controller.positions == [(400, 300), (450, 310), (450, 310)]
 
 

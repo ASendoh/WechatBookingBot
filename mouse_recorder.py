@@ -58,7 +58,7 @@ def play():
         raise ValueError("录制轨迹缺少滑块起点的左键按下操作")
     scale_x, scale_y = WINDOW_SIZE[0] / 2000, WINDOW_SIZE[1] / 1400
     controller = mouse.Controller()
-    previous = 0.0
+    previous = events[0][0]  # 跳过录制开始前的空等，保留动作之间的原有间隔。
 
     for event in events:
         recorded_time, event_type, x, y, *details = event

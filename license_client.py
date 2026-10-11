@@ -1,4 +1,4 @@
-"""云端许可检查。无配置、断网、待批准或禁用时均不执行预约。"""
+"""云端许可检查；启用检查时，无配置、断网、待批准或禁用均不执行预约。"""
 
 import _thread
 from contextlib import contextmanager
@@ -18,6 +18,9 @@ import uuid
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WechatBookingBot"
 DEVICE_FILE = APP_DIR / "device.json"
 APP_VERSION = "2.0"
+# 临时停用全部联网功能（许可、设备/状态/预约计划上传、更新检查和下载）。
+# 改为 True 并重启程序即可恢复；原有联网代码保留。
+ENABLE_NETWORK_FEATURES = False
 # 固定云端许可入口；不能由用户设置文件或环境变量覆盖。
 ENDPOINT = "https://booking-bot-d5gzn52le82e572c9-1499668155.ap-shanghai.app.tcloudbase.com/booking-license"
 CHECK_INTERVAL_SECONDS = 600  # 运行与空闲时均每 10 分钟检查一次。
@@ -38,6 +41,8 @@ class UpdateRequired(LicenseError):
 
 def download_update(update):
     """下载并校验新版；旧程序保持锁定，直到用户运行新版。"""
+    if not ENABLE_NETWORK_FEATURES:
+        raise LicenseError("联网功能已暂时停用，无法下载更新")
     folder = APP_DIR / "updates"
     folder.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
@@ -92,6 +97,8 @@ def device_identity():
 
 
 def check_license(state, plan=None):
+    if not ENABLE_NETWORK_FEATURES:
+        return True
     if not ENDPOINT.startswith("https://"):
         raise LicenseError("云端许可尚未配置，预约已停止")
     device = device_identity()
@@ -131,6 +138,9 @@ def check_license(state, plan=None):
 @contextmanager
 def booking_guard():
     """开抢前立即检查；此后每十分钟检查，失效时中断主线程。"""
+    if not ENABLE_NETWORK_FEATURES:
+        yield
+        return
     check_license("booking")
     stop = threading.Event()
 

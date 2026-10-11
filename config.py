@@ -143,18 +143,21 @@ POLL_INTERVAL = 0.1
 # 连续两次点击“第二天”之间的间隔；需要调整双击速度时修改这里。
 TOMORROW_DOUBLE_CLICK_INTERVAL = 0.2
 
-# 每轮双击“第二天”后，最多等待紫色横线和晚间可预约格子同时出现的时间。
-TOMORROW_LOAD_SECONDS = 1.8
+# 未检测到第二天紫线时，等待多久再复检；仍没有则重新双击。
+TOMORROW_SELECTED_RECHECK_SECONDS = 0.5
+
+# 确认第二天紫线后，检测目标时段可预约格子的最长时间。
+TOMORROW_LOAD_SECONDS = 2.0
 
 # 目标时段所有格子持续呈灰色多久才判定已抢空；防止把加载占位格误判为结果。
 SOLD_OUT_CONFIRM_SECONDS = 1.0
 
-# 刷新页面之前，最多重新双击“第二天”的次数；本阶段最长检测约为次数×上面的等待时间。
+# 刷新页面之前，最多双击“第二天”的轮数。
 TOMORROW_RETRIES = 5
 
 # 点击顶部刷新按钮后固定等待的时间。刷新只点击一次；
 # 等待结束后检查预约页左上角标题，若已回到入口页则尝试重新进入。
-REFRESH_WAIT_SECONDS = 0.1
+REFRESH_WAIT_SECONDS = 0.3
 
 # 每次点击羽毛球入口后，最多等待预约页面模板出现的时间；不影响顶部刷新等待。
 PAGE_LOAD_SECONDS = 0.1

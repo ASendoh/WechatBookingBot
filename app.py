@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw
 
 from calibration import PROFILE_PATH, estimate_slider_start, load_profile
 from calibration_ui import CalibrationWindow
-from license_client import (APP_VERSION, CHECK_INTERVAL_SECONDS, LicenseError,
+from license_client import (APP_VERSION, CHECK_INTERVAL_SECONDS, ENABLE_NETWORK_FEATURES, LicenseError,
                             UpdateRequired, check_license, download_update)
 
 
@@ -242,7 +242,10 @@ class BookingWindow:
         )
 
         self.load_settings()
-        self.set_active(False)  # 首次联网检查通过前不开放操作。
+        if ENABLE_NETWORK_FEATURES:
+            self.set_active(False)  # 首次联网检查通过前不开放操作。
+        else:
+            self.set_license_badge(True)
         icon_image = Image.new("RGB", (64, 64), "#790079")
         draw = ImageDraw.Draw(icon_image)
         draw.ellipse((12, 12, 52, 52), fill="white")
@@ -372,7 +375,10 @@ class BookingWindow:
             self.update_required = None
             self.update_button.pack_forget()
         self.set_active(self.armed)
-        self.license_status.set("● 云端许可已通过" if allowed else "● 云端许可不可用")
+        self.license_status.set(
+            "● 联网功能已停用" if not ENABLE_NETWORK_FEATURES else
+            "● 云端许可已通过" if allowed else "● 云端许可不可用"
+        )
         self.license_badge.configure(
             bg="#E4F4EA" if allowed else "#FCE9E9",
             fg="#216A40" if allowed else "#A73939",
@@ -393,6 +399,9 @@ class BookingWindow:
         self.show_window()
 
     def request_update_download(self):
+        if not ENABLE_NETWORK_FEATURES:
+            self.status.set("联网功能已暂时停用，无法下载更新")
+            return
         if self.update_required is None or self.update_downloading:
             return
         self.update_downloading = True
@@ -600,7 +609,7 @@ class BookingWindow:
                     self.target = None
                     self.set_active(False)
                     self.status.set(f"云端许可不可用：{license_error}")
-            if (self.child is None and not self.license_checking and
+            if (ENABLE_NETWORK_FEATURES and self.child is None and not self.license_checking and
                     time.monotonic() >= self.license_next_check):
                 self.license_checking = True
                 threading.Thread(target=self.check_idle_license, daemon=True).start()

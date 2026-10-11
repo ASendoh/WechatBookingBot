@@ -11,8 +11,29 @@ import license_client as client
 
 
 def run_tests():
+    with (patch.object(client, "ENABLE_NETWORK_FEATURES", False),
+          patch.object(client, "urlopen") as send,
+          patch.object(client, "device_identity") as identity,
+          patch.object(client.threading, "Thread") as thread):
+        assert client.check_license("idle")
+        assert client.check_license("idle", {"court": 17, "time_mode": "19:00-21:00"})
+        assert client.check_license("booking")
+        with client.booking_guard():
+            pass
+        with patch.object(client.tempfile, "NamedTemporaryFile") as output:
+            try:
+                client.download_update(client.UpdateRequired("2.1", "https://example.invalid/new.exe", "a" * 64))
+            except client.LicenseError as error:
+                assert "联网功能已暂时停用" in str(error)
+            else:
+                raise AssertionError("停用联网后不应下载更新")
+            output.assert_not_called()
+        send.assert_not_called()
+        identity.assert_not_called()
+        thread.assert_not_called()
     with TemporaryDirectory() as folder:
-        with (patch.object(client, "APP_DIR", Path(folder)),
+        with (patch.object(client, "ENABLE_NETWORK_FEATURES", True),
+              patch.object(client, "APP_DIR", Path(folder)),
               patch.object(client, "DEVICE_FILE", Path(folder) / "device.json"),
               patch.object(client, "ENDPOINT", "https://example.invalid/license")):
             first = client.device_identity()
